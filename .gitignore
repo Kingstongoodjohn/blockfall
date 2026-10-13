@@ -1,0 +1,9 @@
+# Build output (bin/Blockfall.exe is committed on purpose so the game can be downloaded ready to run)
+build/
+build-win/
+build-linux/
+shots*/
+*.bmp
+__pycache__/
+*.obj
+*.o
