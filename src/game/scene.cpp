@@ -698,15 +698,33 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
         Vec3 bp = g.bus.pos();
         float yaw = std::atan2(g.bus.dir().x, g.bus.dir().z);
         Mat4 root = Mat4::rotationY(yaw) * Mat4::translation(bp);
-        Vec4 busBlue(0.25f, 0.45f, 0.85f, 1);
-        s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(3.2f, 2.8f, 9.0f)) * Mat4::translation(Vec3(0, 1.5f, 0)) * root, busBlue, 0, MAT_METAL));
-        s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(3.3f, 0.9f, 9.1f)) * Mat4::translation(Vec3(0, 1.9f, 0)) * root, Vec4(0.75f, 0.85f, 1, 1), 0, MAT_METAL));  // windows
+        // Flat colours (no metal texture) so it reads as a bus from every angle, including from the roof.
+        Vec4 busBlue(0.22f, 0.45f, 0.90f, 1), busDark(0.12f, 0.2f, 0.4f, 1), roofWhite(0.92f, 0.94f, 0.97f, 1);
+        s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(3.2f, 2.8f, 9.0f)) * Mat4::translation(Vec3(0, 1.5f, 0)) * root, busBlue));          // body
+        s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(3.0f, 0.12f, 8.8f)) * Mat4::translation(Vec3(0, 2.95f, 0)) * root, roofWhite));      // roof deck
+        s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(2.4f, 0.03f, 8.2f)) * Mat4::translation(Vec3(0, 3.02f, 0)) * root, Vec4(0.95f, 0.75f, 0.2f, 1)));  // yellow walkway
+        for (int sd = -1; sd <= 1; sd += 2) {
+            // Window band and a dark skirt along each side, plus a hand rail around the roof.
+            s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(0.08f, 0.9f, 8.2f)) * Mat4::translation(Vec3(1.62f * sd, 1.9f, 0)) * root, Vec4(0.75f, 0.88f, 1, 1)));
+            s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(0.06f, 0.5f, 9.0f)) * Mat4::translation(Vec3(1.62f * sd, 0.45f, 0)) * root, busDark));
+            s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(0.06f, 0.06f, 8.8f)) * Mat4::translation(Vec3(1.5f * sd, 3.6f, 0)) * root, Vec4(0.85f, 0.85f, 0.9f, 1)));  // rail
+            for (int k = -4; k <= 4; k += 2)
+                s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(0.06f, 0.6f, 0.06f)) * Mat4::translation(Vec3(1.5f * sd, 3.3f, k * 1.0f)) * root, Vec4(0.85f, 0.85f, 0.9f, 1)));
+        }
+        for (int wh = -1; wh <= 1; wh += 2) {
+            s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(3.0f, 0.06f, 0.06f)) * Mat4::translation(Vec3(0, 3.6f, 4.4f * wh)) * root, Vec4(0.85f, 0.85f, 0.9f, 1)));   // end rails
+            s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(3.2f, 0.9f, 0.08f)) * Mat4::translation(Vec3(0, 1.9f, 4.52f * wh)) * root, Vec4(0.75f, 0.88f, 1, 1)));  // windscreens
+            s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(3.4f, 0.35f, 0.3f)) * Mat4::translation(Vec3(0, 0.5f, 4.55f * wh)) * root, busDark));                  // bumpers
+            for (int sd = -1; sd <= 1; sd += 2)
+                s.opaque[MESH_SPHERE].push_back(inst(Mat4::scale(Vec3(0.3f, 0.3f, 0.2f)) * Mat4::translation(Vec3(1.1f * sd, 1.0f, 4.6f * wh)) * root,
+                                                     wh > 0 ? Vec4(1, 0.95f, 0.7f, 1) : Vec4(0.9f, 0.15f, 0.1f, 1), 0.6f));                  // lights
+        }
         for (int sd = -1; sd <= 1; sd += 2)
             for (int wh = -1; wh <= 1; wh += 2)
                 s.opaque[MESH_CYLINDER].push_back(inst(Mat4::scale(Vec3(1.0f, 0.5f, 1.0f)) * Mat4::rotationZ(PI * 0.5f) *
                                                            Mat4::translation(Vec3(1.7f * sd, 0.3f, 2.8f * wh)) * root,
-                                                       Vec4(0.1f, 0.1f, 0.12f, 1), 0, MAT_METAL));
-        s.opaque[MESH_CYLINDER].push_back(inst(Mat4::scale(Vec3(0.3f, 6.0f, 0.3f)) * Mat4::translation(Vec3(0, 6.0f, 0)) * root, Vec4(0.3f, 0.3f, 0.32f, 1), 0, MAT_METAL));
+                                                       Vec4(0.1f, 0.1f, 0.12f, 1)));
+        s.opaque[MESH_CYLINDER].push_back(inst(Mat4::scale(Vec3(0.3f, 6.0f, 0.3f)) * Mat4::translation(Vec3(0, 6.0f, 0)) * root, Vec4(0.3f, 0.3f, 0.32f, 1)));
         s.opaque[MESH_SPHERE].push_back(inst(Mat4::scale(Vec3(9.0f, 7.0f, 9.0f)) * Mat4::translation(Vec3(0, 12.5f, 0)) * root, Vec4(0.9f, 0.3f, 0.55f, 1), 0.2f, MAT_CLOTH));
         s.opaque[MESH_SPHERE].push_back(inst(Mat4::scale(Vec3(6.0f, 6.0f, 6.0f)) * Mat4::translation(Vec3(0, 12.5f, 0)) * root, Vec4(0.95f, 0.6f, 0.2f, 1), 0.2f, MAT_CLOTH));
     }

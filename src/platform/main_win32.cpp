@@ -135,7 +135,7 @@ struct Demo {
         if (f == 48) pendingShot = "03c_locker.bmp";
         if (f == 49) { fe.screen = Screen::Lobby; fe.invite("JUNO"); }
         if (f == 50) fe.startMatch();
-        if (f > 50 && f < 60) { g.player.pitch = 0.55f; g.player.yaw += 0.03f; }  // looking up: camera must stay above the roof
+        if (f > 50 && f < 60) { g.player.pitch = -1.0f; g.player.yaw += 0.03f; }  // looking down at the roof deck
         if (f == 57) pendingShot = "04a_battle_bus.bmp";
         if (f >= 58 && f < 76) {
             // Jump: hang in the air skydiving (held in place) long enough for the pose to blend in.

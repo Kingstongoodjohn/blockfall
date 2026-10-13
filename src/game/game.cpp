@@ -126,7 +126,7 @@ void Game::startMatch(const MatchConfig& cfgIn) {
         bus.end = side * off + d * (MAP_HALF + 20.0f) + Vec3(0, BUS_HEIGHT, 0);
         bus.t = 0;
         dropPhase = DropPhase::OnBus;
-        player.body.pos = bus.pos() + d * 4.0f + Vec3(0, 3.0f, 0);  // on the roof, at the front
+        player.body.pos = bus.pos() + d * 3.0f + Vec3(0, 3.05f, 0);  // on the roof, at the front
         player.yaw = std::atan2(d.x, d.z);
         for (Bot& b : bots) {
             b.drop = DropPhase::OnBus;
@@ -350,7 +350,7 @@ void Game::updateCamera() {
     // The bus is not part of the world, so the wall check can't keep the camera out of it.
     // Keep the eye above the roof while you stand on it (looking up used to put it inside).
     if (player.alive && dropPhase == DropPhase::OnBus) {
-        float roofTop = bus.pos().y + 2.9f + 0.4f;
+        float roofTop = bus.pos().y + 3.05f + 0.4f;
         if (camera.eye.y < roofTop) {
             camera.eye.y = roofTop;
             camera.aimRay.origin = camera.eye;
@@ -435,7 +435,7 @@ void Game::updateBus(const InputState& in, float dt) {
     }
     // You.
     if (player.alive && dropPhase == DropPhase::OnBus) {
-        player.body.pos = bus.pos() + bus.dir() * 4.0f + Vec3(0, 3.0f, 0);
+        player.body.pos = bus.pos() + bus.dir() * 3.0f + Vec3(0, 3.05f, 0);
         player.body.vel = Vec3();
         // Look around freely.
         float sens = mouseSensitivity;
@@ -472,7 +472,7 @@ void Game::updateBus(const InputState& in, float dt) {
     for (Bot& b : bots) {
         if (!b.alive) continue;
         if (b.drop == DropPhase::OnBus) {
-            b.body.pos = bus.pos() + bus.dir() * 4.0f + Vec3(0, 3.0f, 0);
+            b.body.pos = bus.pos() + bus.dir() * 3.0f + Vec3(0, 3.05f, 0);
             if (bus.t >= b.dropAt || !bus.flying) {
                 b.drop = DropPhase::Skydive;
                 b.body.pos = bus.pos() + Vec3(rng.range(-2, 2), 1.0f, rng.range(-2, 2));

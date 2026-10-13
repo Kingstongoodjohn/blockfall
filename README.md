@@ -25,7 +25,9 @@ If Windows shows "Windows protected your PC", click **More info**, then **Run an
   chevrons, a lightning bolt and a panelled jacket.
 - **Skydive fixed.** The whole body now tips over at the hips, so you fall belly-down, head
   first, arms out and legs trailing - instead of standing up in the air.
-- **Battle bus fixed.** The camera can no longer drop inside the bus when you look up on the roof.
+- **Battle bus fixed.** The bus is drawn in flat colours with a white roof deck, yellow walkway,
+  hand rails, windows, bumpers and lights, you stand on the deck (not the edge), and the camera
+  can no longer drop inside the bus when you look up.
 - **Anti-aliasing redone.** High now renders at 2x resolution and downsamples (supersampling);
   the temporal pass clips history in YCoCg colour space and sharpens only brightness, which
   removes the rainbow fringes on dark edges.
