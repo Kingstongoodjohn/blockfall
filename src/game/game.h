@@ -28,6 +28,7 @@ constexpr float CHEST_OPEN_TIME = 0.5f;
 constexpr float INTERACT_RANGE = 2.8f;
 constexpr float EDIT_RANGE = 9.0f;
 constexpr float BOT_DAMAGE_SCALE = 0.45f;  // bots hit softer than you so they're beatable
+constexpr float BOT_VS_BOT_DAMAGE_SCALE = 0.55f;  // ...and softer again against each other (longer matches)
 constexpr int PLAYER_ACTOR_ID = -100;      // HitInfo::id when a trace hits the player
 constexpr int NO_TARGET = -1000;
 
@@ -110,6 +111,12 @@ struct Player {
     float interactTimer = 0;  // chest hold progress
     float walkPhase = 0;
     bool alive = true;
+    // Knocked (duos/trios/squads): down on the ground, bleeding out, until a teammate revives you.
+    bool down = false;
+    float downHealth = 0;
+    float reviveProgress = 0;   // 0..1, filled by whoever is reviving you
+    bool revivedThisFrame = false;
+    int lastAttacker = NO_TARGET;
     float hurtTimer = 0;
     int kills = 0;
     float shotAnim = 0;       // recoil kick, counts down after each shot
@@ -191,7 +198,21 @@ struct Bot {
     float dropAt = 0;          // bus time (0..1) when this bot jumps
     Vec3 landing;              // where it steers to while gliding
     bool alive = true;
+    bool down = false;         // knocked: crawling, bleeding out, waiting for a revive
+    float downHealth = 0;
+    float reviveProgress = 0;
+    bool revivedThisFrame = false;
+    int reviveTarget = NO_TARGET;  // the teammate this bot is going to pick up
 };
+
+// Knocked phase (team modes only). A knocked player bleeds out in KNOCK_HEALTH / KNOCK_BLEED seconds
+// unless a standing teammate holds Interact next to them for REVIVE_TIME.
+constexpr float KNOCK_HEALTH = 100.0f;
+constexpr float KNOCK_BLEED = 2.5f;      // down-health lost per second
+constexpr float REVIVE_TIME = 5.0f;
+constexpr float REVIVE_RANGE = 2.6f;
+constexpr float REVIVE_HEALTH = 30.0f;
+constexpr float CRAWL_SPEED = 1.3f;
 
 // Running damage total on one target; resets after a second without a hit.
 struct DamageStack {
@@ -214,8 +235,10 @@ struct DamageNumber {
 struct Grenade {
     Vec3 pos, vel;
     float age = 0;
+    float fuse = -1;    // once it lands: seconds left before it goes off (-1 while still flying)
     bool alive = true;
 };
+constexpr float SHOCKWAVE_FUSE = 1.0f;  // it sits where it lands for this long, then blows
 struct ShockRing {
     Vec3 pos;
     float age = 0;
@@ -241,7 +264,7 @@ struct Camera {
 };
 
 struct InteractPrompt {
-    enum Kind { None, OpenChest, PickUp } kind = None;
+    enum Kind { None, OpenChest, PickUp, Revive } kind = None;
     int index = -1;
     std::string text;
     float progress = 0;
@@ -283,6 +306,8 @@ public:
     void reset(uint64_t seed);  // Solo match with default settings (used by tests)
     void confirmEdit();         // applies the edit selection (public for tests)
     void updateBot(Bot& b, float dt);  // one bot's thinking + movement (public for tests)
+    void updateKnockedBot(Bot& b, float dt);
+    bool botRevive(Bot& b, float dt);
     void update(const InputState& in, float dt);
 
     // State (read by renderer/HUD)
@@ -352,6 +377,15 @@ public:
     void openChest(int index);
     // Damages the player or a bot. Friendly fire is ignored. Returns damage dealt.
     float damageActor(int victimId, float amount, bool head, const Vec3& at, int attackerId, const char* weapon);
+    // Knocked phase helpers.
+    bool knockModes() const { return config.teamSize > 1; }
+    bool actorDown(int id) const;
+    bool teamStanding(int team, int except) const;   // anyone on the team alive and not knocked?
+    void knock(int victim, int attacker, const char* weapon);
+    void eliminate(int victim, int attacker, const char* weapon);
+    void revive(int id);
+    void addRevive(int id, float dt);               // one frame of reviving `id`
+    void updateKnocked(float dt);
     void damagePlayer(float amount) { damageActor(PLAYER_ACTOR_ID, amount, false, Vec3(), NO_TARGET, ""); }
     bool tryPlaceBuild();
     void updateCamera();

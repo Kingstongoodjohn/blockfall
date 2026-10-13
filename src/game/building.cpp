@@ -78,11 +78,13 @@ AABB pieceTileBounds(const Piece& p, int tile) {
         float x0 = o.x + tx * h, z0 = o.z + tz * h;
         if (s.type == PieceType::Floor) return {{x0, o.y - FLOOR_THICK, z0}, {x0 + h, o.y, z0 + h}};
         if (s.type == PieceType::Ramp) {
-            // Follow the ramp's surface so the edit grid sits on it.
+            // Follow the ramp's surface so the edit grid sits on it (a thin, flat tile).
             float yc = o.y + rampHeightAt(p, x0 + h * 0.5f - o.x, z0 + h * 0.5f - o.z);
-            return {{x0, yc - 0.3f, z0}, {x0 + h, yc + 0.3f, z0 + h}};
+            return {{x0, yc - 0.12f, z0}, {x0 + h, yc + 0.12f, z0 + h}};
         }
-        return {{x0, o.y, z0}, {x0 + h, o.y + CONE_EDIT_HEIGHT, z0 + h}};
+        // Cones too: a flat tile at the surface height of the quadrant's middle.
+        float yc = o.y + coneHeightAt(p, x0 + h * 0.5f - o.x, z0 + h * 0.5f - o.z);
+        return {{x0, yc - 0.12f, z0}, {x0 + h, yc + 0.12f, z0 + h}};
     }
     return pieceBounds(s);
 }

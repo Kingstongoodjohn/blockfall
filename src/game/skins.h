@@ -14,7 +14,7 @@ struct Skin {
     int hairStyle;    // 0 spiky, 1 flat cap of hair, 2 mohawk, 3 long/back
     int hatStyle;     // 0 none, 1 cap, 2 beanie, 3 helmet
     bool headband;
-    int pattern;      // 0 plain, 1 stripes, 2 camo, 3 checker, 4 hex, 5 stars, 6 flames, 7 sash
+    int pattern;      // 0 plain, 1 stripes, 2 camo, 3 checker, 4 hex, 5 stars, 6 flames, 7 sash, 8 racing, 9 plaid, 10 two-tone, 11 chevrons, 12 lightning, 13 panelled
     int skinTone;
     int rarity;       // 0 uncommon, 1 rare, 2 epic, 3 legendary
 };

@@ -584,30 +584,56 @@ float4 PSFxaa(VSOut i) : SV_Target {
 }
 
 // ---- temporal AA: blend with last frame, reprojected through the depth buffer
+float3 toYCoCg(float3 c) { return float3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }
+float3 fromYCoCg(float3 c) { return float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+
 float4 PSTaa(VSOut i) : SV_Target {
     float2 px = 1.0 / p0.xy;
     float2 uvJ = i.uv - p3.zw;   // undo this frame's jitter when reading the current image
     float3 cur = t0.Sample(linS, uvJ).rgb;
-    float3 mn = cur, mx = cur;
+    // Neighbourhood statistics in YCoCg: the history may only be as different from the
+    // current frame as its neighbours are (variance clipping), which kills ghosting without
+    // the colour fringes a plain RGB box clamp gives on dark edges.
+    float3 m1 = 0.0, m2 = 0.0;
     [unroll] for (int y = -1; y <= 1; ++y)
         [unroll] for (int x = -1; x <= 1; ++x) {
-            float3 s = t0.Sample(pointS, uvJ + float2(x, y) * px).rgb;
-            mn = min(mn, s); mx = max(mx, s);
+            float3 s = toYCoCg(t0.Sample(pointS, uvJ + float2(x, y) * px).rgb);
+            m1 += s; m2 += s * s;
         }
+    float3 mean = m1 / 9.0;
+    float3 sigma = sqrt(max(m2 / 9.0 - mean * mean, 0.0));
+    float3 mn = mean - 1.25 * sigma, mx = mean + 1.25 * sigma;
+
     float d = t2.Sample(pointS, i.uv).r;
     float3 world = worldAt(i.uv, d);
     float4 prev = mul(float4(world, 1.0), prevViewProj);
     float2 puv = (prev.xy / prev.w) * float2(0.5, -0.5) + 0.5;
     float blend = p3.x;
     if (prev.w <= 0.0 || puv.x < 0.0 || puv.x > 1.0 || puv.y < 0.0 || puv.y > 1.0) blend = 1.0;
-    float3 hist = clamp(t1.Sample(linS, puv).rgb, mn, mx);
-    float3 c = lerp(hist, cur, blend);
+    float3 hist = toYCoCg(t1.Sample(linS, puv).rgb);
+    // Clip toward the mean (not just clamp) so edges stay crisp.
+    float3 dir = hist - mean;
+    float3 lim = max(abs(dir) / max(mx - mean, 1e-4), 1.0);
+    float t = 1.0 / max(max(lim.x, lim.y), lim.z);
+    hist = mean + dir * t;
+    float3 c = lerp(hist, toYCoCg(cur), blend);
     if (p3.y > 0.0) {
-        float3 b = (t0.Sample(linS, uvJ + float2(px.x, 0)).rgb + t0.Sample(linS, uvJ - float2(px.x, 0)).rgb +
-                    t0.Sample(linS, uvJ + float2(0, px.y)).rgb + t0.Sample(linS, uvJ - float2(0, px.y)).rgb) * 0.25;
-        c = saturate(c + (c - b) * p3.y);
+        // Sharpen the brightness only; colours are left alone (no rainbow fringes).
+        float lb = (luma(t0.Sample(linS, uvJ + float2(px.x, 0)).rgb) + luma(t0.Sample(linS, uvJ - float2(px.x, 0)).rgb) +
+                    luma(t0.Sample(linS, uvJ + float2(0, px.y)).rgb) + luma(t0.Sample(linS, uvJ - float2(0, px.y)).rgb)) * 0.25;
+        float lc = luma(fromYCoCg(c));
+        float ls = max(lc + (lc - lb) * p3.y, 0.0);
+        c.x *= (lc > 1e-4) ? ls / lc : 1.0;
     }
-    return float4(c, 1.0);
+    return float4(saturate(fromYCoCg(c)), 1.0);
+}
+
+// Supersampling resolve: the render is 2x the window in both directions; average each 2x2.
+float4 PSDownsample(VSOut i) : SV_Target {
+    float2 px = 1.0 / p0.xy;   // p0 = the big render size
+    float3 c = t0.Sample(linS, i.uv + float2(-0.5, -0.5) * px).rgb + t0.Sample(linS, i.uv + float2(0.5, -0.5) * px).rgb +
+               t0.Sample(linS, i.uv + float2(-0.5, 0.5) * px).rgb + t0.Sample(linS, i.uv + float2(0.5, 0.5) * px).rgb;
+    return float4(c * 0.25, 1.0);
 }
 
 float4 PSCopy(VSOut i) : SV_Target { return t0.Sample(pointS, i.uv); }
@@ -1022,7 +1048,7 @@ bool RendererD3D11::compileShaders(std::string& error, bool sm5) {
     safeRelease(vsb);
     struct { const char* entry; ID3D11PixelShader** out; } posts[] = {
         {"PSLight", &psLight_}, {"PSDown", &psDown_}, {"PSBlur", &psBlur_}, {"PSCompose", &psCompose_},
-        {"PSFxaa", &psFxaa_}, {"PSTaa", &psTaa_}, {"PSCopy", &psCopy_},
+        {"PSFxaa", &psFxaa_}, {"PSTaa", &psTaa_}, {"PSCopy", &psCopy_}, {"PSDownsample", &psDownsample_},
     };
     for (auto& p : posts) {
         if (!compile(kPostShader, p.entry, psT, &psb, error)) return false;
@@ -1082,18 +1108,21 @@ bool RendererD3D11::createTargets(std::string& error) {
     dev_->CreateRenderTargetView(back, nullptr, &backRtv_);
     safeRelease(back);
 
-    bool ok = createTarget(color_, width_, height_, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-              createTarget(normal_, width_, height_, DXGI_FORMAT_R8G8B8A8_UNORM) &&
-              createTarget(lit_, width_, height_, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-              createTarget(blurA_, width_ / 2, height_ / 2, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-              createTarget(blurB_, width_ / 2, height_ / 2, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
-              createTarget(ldr_, width_, height_, DXGI_FORMAT_R8G8B8A8_UNORM) &&
-              createTarget(taa_[0], width_, height_, DXGI_FORMAT_R8G8B8A8_UNORM) &&
-              createTarget(taa_[1], width_, height_, DXGI_FORMAT_R8G8B8A8_UNORM);
+    renderScale_ = gfx_.get(GfxOption::AntiAliasing) >= 3 ? 2 : 1;
+    rw_ = width_ * renderScale_;
+    rh_ = height_ * renderScale_;
+    bool ok = createTarget(color_, rw_, rh_, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+              createTarget(normal_, rw_, rh_, DXGI_FORMAT_R8G8B8A8_UNORM) &&
+              createTarget(lit_, rw_, rh_, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+              createTarget(blurA_, rw_ / 2, rh_ / 2, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+              createTarget(blurB_, rw_ / 2, rh_ / 2, DXGI_FORMAT_R16G16B16A16_FLOAT) &&
+              createTarget(ldr_, rw_, rh_, DXGI_FORMAT_R8G8B8A8_UNORM) &&
+              createTarget(taa_[0], rw_, rh_, DXGI_FORMAT_R8G8B8A8_UNORM) &&
+              createTarget(taa_[1], rw_, rh_, DXGI_FORMAT_R8G8B8A8_UNORM);
 
     D3D11_TEXTURE2D_DESC td = {};
-    td.Width = width_;
-    td.Height = height_;
+    td.Width = rw_;
+    td.Height = rh_;
     td.MipLevels = 1;
     td.ArraySize = 1;
     td.Format = DXGI_FORMAT_R24G8_TYPELESS;
@@ -1168,6 +1197,13 @@ void RendererD3D11::resize(int width, int height) {
 }
 
 void RendererD3D11::setGraphics(const GraphicsSettings& g) {
+    int wantScale = g.get(GfxOption::AntiAliasing) >= 3 ? 2 : 1;
+    if (wantScale != renderScale_ && swap_) {
+        gfx_ = g;
+        releaseTargets();
+        std::string err;
+        createTargets(err);
+    }
     gfx_ = g;
     static const int shadowSizes[4] = {0, 1024, 2048, 4096};
     int want = shadowSizes[g.get(GfxOption::Shadows)];
@@ -1562,8 +1598,8 @@ void RendererD3D11::render(const SceneList& scene, const std::vector<HudQuad>& h
     float jx = 0, jy = 0;
     if (taa) {
         unsigned k = frame_ % 8 + 1;
-        jx = (halton(k, 2) - 0.5f) * 2.0f / width_;
-        jy = (halton(k, 3) - 0.5f) * 2.0f / height_;
+        jx = (halton(k, 2) - 0.5f) * 2.0f / rw_;
+        jy = (halton(k, 3) - 0.5f) * 2.0f / rh_;
     }
     Mat4 proj = scene.proj;
     proj.m[2][0] += jx;
@@ -1640,7 +1676,7 @@ void RendererD3D11::render(const SceneList& scene, const std::vector<HudQuad>& h
     ctx_->ClearDepthStencilView(dsv_, D3D11_CLEAR_DEPTH, 1.0f, 0);
     ID3D11RenderTargetView* rts[2] = {color_.rtv, normal_.rtv};
     ctx_->OMSetRenderTargets(2, rts, dsv_);
-    D3D11_VIEWPORT vp = {0, 0, (float)width_, (float)height_, 0, 1};
+    D3D11_VIEWPORT vp = {0, 0, (float)rw_, (float)rh_, 0, 1};
     ctx_->RSSetViewports(1, &vp);
     ctx_->RSSetState(rsSolid_);
     ctx_->VSSetShader(vsScene_, nullptr, 0);
@@ -1661,7 +1697,7 @@ void RendererD3D11::render(const SceneList& scene, const std::vector<HudQuad>& h
             PostCB* p = (PostCB*)ms.pData;
             p->invViewProj = invVP;
             p->prevViewProj = historyValid_ ? prevViewProj_ : viewProj;
-            p->p0 = Vec4((float)width_, (float)height_, 0.1f, 600.0f);
+            p->p0 = Vec4((float)rw_, (float)rh_, 0.1f, 600.0f);
             p->p1 = Vec4((float)gfx_.get(GfxOption::Lighting), (float)gfx_.get(GfxOption::PostFx), (float)aa, frame_ / 60.0f);
             p->p2 = Vec4(scene.drawTerrain ? 140.0f : 60.0f, scene.drawTerrain ? 480.0f : 200.0f, dofFocus, blurDir);
             p->sky = scene.sky;
@@ -1679,7 +1715,7 @@ void RendererD3D11::render(const SceneList& scene, const std::vector<HudQuad>& h
     postCB(0);
     {   // lighting: AO + bounce
         ID3D11ShaderResourceView* in[3] = {color_.srv, normal_.srv, depthSrv_};
-        fullscreen(psLight_, lit_.rtv, width_, height_, in, 3);
+        fullscreen(psLight_, lit_.rtv, rw_, rh_, in, 3);
     }
     const int post = gfx_.get(GfxOption::PostFx);
     if (post >= 2) {
@@ -1709,29 +1745,35 @@ void RendererD3D11::render(const SceneList& scene, const std::vector<HudQuad>& h
     }
     {   // compose
         ID3D11ShaderResourceView* in[3] = {lit_.srv, blurA_.srv, depthSrv_};
-        fullscreen(psCompose_, ldr_.rtv, width_, height_, in, 3);
+        fullscreen(psCompose_, ldr_.rtv, rw_, rh_, in, 3);
     }
     Target& out = taa_[frame_ & 1];
     Target& hist = taa_[(frame_ + 1) & 1];
     if (aa == 1) {
         ID3D11ShaderResourceView* in[1] = {ldr_.srv};
-        fullscreen(psFxaa_, out.rtv, width_, height_, in, 1);
+        fullscreen(psFxaa_, out.rtv, rw_, rh_, in, 1);
     } else if (taa) {
         ID3D11ShaderResourceView* in[3] = {ldr_.srv, hist.srv, depthSrv_};
-        fullscreen(psTaa_, out.rtv, width_, height_, in, 3);
+        fullscreen(psTaa_, out.rtv, rw_, rh_, in, 3);
         historyValid_ = true;
     } else {
         ID3D11ShaderResourceView* in[1] = {ldr_.srv};
-        fullscreen(psCopy_, out.rtv, width_, height_, in, 1);
+        fullscreen(psCopy_, out.rtv, rw_, rh_, in, 1);
     }
     if (!taa) historyValid_ = false;
     prevViewProj_ = viewProj;
 
     // To the back buffer.
-    ID3D11Texture2D* back = nullptr;
-    if (SUCCEEDED(swap_->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&back))) {
-        ctx_->CopyResource(back, out.tex);
-        safeRelease(back);
+    if (renderScale_ == 1) {
+        ID3D11Texture2D* back = nullptr;
+        if (SUCCEEDED(swap_->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&back))) {
+            ctx_->CopyResource(back, out.tex);
+            safeRelease(back);
+        }
+    } else {
+        // Supersampled: average the 2x render down to the window.
+        ID3D11ShaderResourceView* in[1] = {out.srv};
+        fullscreen(psDownsample_, backRtv_, width_, height_, in, 1);
     }
 
     // 7) HUD.
@@ -1754,7 +1796,8 @@ void RendererD3D11::render(const SceneList& scene, const std::vector<HudQuad>& h
             ctx_->Unmap(cbHud_, 0);
         }
         ctx_->OMSetRenderTargets(1, &backRtv_, nullptr);
-        ctx_->RSSetViewports(1, &vp);
+        D3D11_VIEWPORT hvp = {0, 0, (float)width_, (float)height_, 0, 1};
+        ctx_->RSSetViewports(1, &hvp);
         UINT stride = sizeof(HudVertex), off = 0;
         ctx_->IASetVertexBuffers(0, 1, &hudBuf_, &stride, &off);
         ctx_->IASetInputLayout(layoutHud_);

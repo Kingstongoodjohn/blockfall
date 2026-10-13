@@ -91,7 +91,9 @@ private:
     void ensureHudCapacity(size_t verts);
 
     HWND hwnd_ = nullptr;
-    int width_ = 0, height_ = 0;
+    int width_ = 0, height_ = 0;   // window
+    int rw_ = 0, rh_ = 0;           // internal render size (2x the window on Anti-Aliasing High)
+    int renderScale_ = 1;
     std::string adapterName_;
     GraphicsSettings gfx_;
     unsigned frame_ = 0;
@@ -127,6 +129,7 @@ private:
     ID3D11PixelShader* psFxaa_ = nullptr;
     ID3D11PixelShader* psTaa_ = nullptr;
     ID3D11PixelShader* psCopy_ = nullptr;
+    ID3D11PixelShader* psDownsample_ = nullptr;
     ID3D11VertexShader* vsHud_ = nullptr;
     ID3D11PixelShader* psHud_ = nullptr;
     ID3D11InputLayout* layoutHud_ = nullptr;

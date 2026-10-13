@@ -566,7 +566,7 @@ void FrontEnd::friendsScreen() {
         }
     }
     y += 72 * u;
-    hud_->text(x, y, 1.6f * u, DIM, "ADD A FRIEND");
+    hud_->text(x, y, 1.6f * u, DIM, "ADD A FRIEND (THE NAME OF A REAL PLAYER ACCOUNT)");
     y += 24 * u;
     bool submit = textField(2, friendInput_, "FRIEND'S NAME", x, y, 420 * u, 48 * u);
     if (button("ADD", x + 436 * u, y, 140 * u, 48 * u, true) || submit) {
@@ -574,6 +574,7 @@ void FrontEnd::friendsScreen() {
         if (n.empty()) notify("TYPE A NAME FIRST");
         else if (settings.hasFriend(n)) notify(n + " IS ALREADY YOUR FRIEND");
         else if (n == settings.playerName) notify("THAT'S YOU!");
+        else if (!accounts.exists(n)) notify("NO PLAYER CALLED " + n + " - THEY NEED AN ACCOUNT ON THIS PC FIRST");
         else if (settings.addFriend(n)) {
             notify("ADDED " + n);
             friendInput_.clear();

@@ -297,9 +297,13 @@ void Game::perceive(Bot& b) {
     struct Cand { int id; float d; };
     Cand cands[64];
     int n = 0;
+    // Bots notice each other from closer than they notice you, and not at all while they are
+    // still looting in the first minute or so - both keep the lobby full for longer.
+    const bool earlyGame = time < 75.0f;
     auto consider = [&](int id, const Vec3& pos) {
         float d = length(pos - b.body.pos);
-        if (d < 75.0f && n < 64) cands[n++] = {id, d};
+        float range = id == PLAYER_ACTOR_ID ? 75.0f : (earlyGame ? 22.0f : 48.0f);
+        if (d < range && n < 64) cands[n++] = {id, d};
     };
     if (player.alive && b.team != 0 && dropPhase == DropPhase::Landed) consider(PLAYER_ACTOR_ID, player.body.pos);
     for (const Bot& o : bots)
@@ -463,13 +467,67 @@ void Game::botShoot(Bot& b) {
         }
         tracers.push_back({muzzle, end, Vec4(1.0f, 0.45f, 0.35f, 0.9f), 0});
     }
-    for (auto& kv : dmg) damageActor(kv.first, kv.second * BOT_DAMAGE_SCALE, head[kv.first], at[kv.first], b.index, g.name);
+    for (auto& kv : dmg) {
+        // Bots shooting other bots hit softer still, so the lobby doesn't thin out in the first minute.
+        float scale = BOT_DAMAGE_SCALE * (kv.first == PLAYER_ACTOR_ID ? 1.0f : BOT_VS_BOT_DAMAGE_SCALE);
+        damageActor(kv.first, kv.second * scale, head[kv.first], at[kv.first], b.index, g.name);
+    }
     b.gun.count--;
     onShotFired(b.gunState, g);
     b.shotAnim = 0.12f;
 }
 
+// Knocked: crawl toward the nearest standing teammate and wait to be picked up.
+void Game::updateKnockedBot(Bot& b, float dt) {
+    b.hurtTimer = std::max(0.0f, b.hurtTimer - dt);
+    b.body.height = 0.9f;
+    Vec3 goal = b.body.pos;
+    float best = 1e9f;
+    if (b.team == 0 && player.alive && !player.down) { goal = player.body.pos; best = lengthXZ(player.body.pos - b.body.pos); }
+    for (const Bot& o : bots) {
+        if (o.index == b.index || o.team != b.team || !o.alive || o.down) continue;
+        float d = lengthXZ(o.body.pos - b.body.pos);
+        if (d < best) { best = d; goal = o.body.pos; }
+    }
+    if (best > 3.0f && best < 60.0f) steerBot(b, goal, CRAWL_SPEED, dt);
+    else steerBot(b, b.body.pos, 0, dt);
+    Vec3 v(b.body.vel.x, 0, b.body.vel.z);
+    if (length(v) > 0.2f) turnToward(b.yaw, std::atan2(v.x, v.z), 4.0f * dt);
+}
+
+// Standing bots go and pick up a knocked teammate when nothing is shooting at them.
+bool Game::botRevive(Bot& b, float dt) {
+    if (b.reviveTarget != NO_TARGET && (!actorDown(b.reviveTarget) || actorTeam(b.reviveTarget) != b.team)) b.reviveTarget = NO_TARGET;
+    if (b.reviveTarget == NO_TARGET) {
+        if (b.canSee || b.hurtTimer > 1.0f) return false;   // busy fighting
+        float best = 60.0f;
+        if (b.team == 0 && actorDown(PLAYER_ACTOR_ID)) { best = lengthXZ(player.body.pos - b.body.pos); b.reviveTarget = PLAYER_ACTOR_ID; }
+        for (const Bot& o : bots) {
+            if (o.team != b.team || !o.alive || !o.down || o.index == b.index) continue;
+            float d = lengthXZ(o.body.pos - b.body.pos);
+            if (d < best) { best = d; b.reviveTarget = o.index; }
+        }
+        if (b.reviveTarget == NO_TARGET) return false;
+    }
+    // Someone shooting at us? Deal with that first (but remember who needs help).
+    if (b.canSee && b.hurtTimer > 0.5f) return false;
+    Vec3 goal = actorPos(b.reviveTarget);
+    float d = length(goal - b.body.pos);
+    if (d > REVIVE_RANGE * 0.8f) {
+        steerBot(b, goal, 6.0f, dt);
+        Vec3 v(b.body.vel.x, 0, b.body.vel.z);
+        if (length(v) > 0.3f) turnToward(b.yaw, std::atan2(v.x, v.z), 6.0f * dt);
+    } else {
+        steerBot(b, b.body.pos, 0, dt);
+        Vec3 to = goal - b.body.pos;
+        turnToward(b.yaw, std::atan2(to.x, to.z), 6.0f * dt);
+        addRevive(b.reviveTarget, dt);
+    }
+    return true;
+}
+
 void Game::updateBot(Bot& b, float dt) {
+    if (b.down) { updateKnockedBot(b, dt); return; }
     const GunStats& g = gunStats(b.gun.gun);
     if (tickGun(b.gunState, g, dt)) b.gun.count = g.magSize;  // bots have unlimited reserve ammo
     if (b.gun.count <= 0 && b.gunState.reloadTimer <= 0) b.gunState.reloadTimer = g.reloadTime;
@@ -485,6 +543,8 @@ void Game::updateBot(Bot& b, float dt) {
         perceive(b);
         botLoot(b);
     }
+    // A knocked teammate to pick up?
+    if (knockModes() && (b.state == AIState::Wander || b.state == AIState::TakeCover || b.state == AIState::Chase) && botRevive(b, dt)) return;
     // Using a heal item: stand still until it's done (or until it gets shot).
     if ((b.state == AIState::Wander || b.state == AIState::TakeCover) && botHeal(b, dt)) {
         steerBot(b, b.body.pos, 0, dt);

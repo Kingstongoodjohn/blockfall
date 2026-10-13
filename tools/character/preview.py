@@ -16,7 +16,7 @@ arm = [o for o in bpy.data.objects if o.type == 'ARMATURE'][0]
 meshes = {o.name: o for o in bpy.data.objects if o.type == 'MESH'}
 print('meshes', sorted(meshes), 'bones', len(arm.data.bones), 'actions', [a.name for a in bpy.data.actions])
 
-skin_files = sorted(os.listdir(os.path.join(ASSETS, 'skins')))
+skin_files = {int(f.split('_')[0]): f for f in os.listdir(os.path.join(ASSETS, 'skins')) if f.endswith('.png')}
 sys.path.insert(0, HERE)
 from skins_catalog import SKINS
 HAIR = {0: 'Hair0', 1: 'Hair1', 2: 'Hair2', 3: 'Hair3'}

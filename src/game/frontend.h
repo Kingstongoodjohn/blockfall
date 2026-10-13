@@ -61,6 +61,7 @@ public:
 
     // Accounts: everything you own lives in the signed-in account's file.
     AccountStore accounts;
+    std::string& friendInputForTests() { return friendInput_; }
     Account account;
     bool signedIn = false;
     bool signIn(const std::string& name, const std::string& password, std::string& error);

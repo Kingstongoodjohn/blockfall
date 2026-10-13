@@ -23,22 +23,25 @@ FPS = 24
 # ------------------------------------------------------------------ the body
 # Blender axes: X right (character's left), -Y front, Z up. Metres.
 J = {  # joint: (position, (radius x, radius y))
-    'Hips':    ((0, 0, 0.97), (0.19, 0.125)),
-    'Spine':   ((0, 0, 1.14), (0.155, 0.11)),     # waist
-    'Chest':   ((0, 0, 1.40), (0.25, 0.135)),     # broad, flat chest
-    'Neck':    ((0, 0, 1.55), (0.065, 0.065)),
-    'Head':    ((0, 0.01, 1.74), (0.18, 0.195)),
-    'HeadTop': ((0, 0.0, 1.93), (0.115, 0.12)),
+    # Athletic proportions: small head (about 1/6 of the height), thin neck, broad shoulders,
+    # narrow waist and hips, slim arms and long legs.
+    'Hips':    ((0, 0, 1.00), (0.165, 0.115)),
+    'Spine':   ((0, 0, 1.18), (0.13, 0.10)),      # narrow waist
+    'Chest':   ((0, 0, 1.46), (0.235, 0.13)),     # broad, flat chest
+    'Neck':    ((0, 0, 1.64), (0.05, 0.05)),
+    'Head':    ((0, 0.01, 1.82), (0.135, 0.145)),
+    'HeadTop': ((0, 0.0, 1.95), (0.085, 0.085)),
 }
+HK = 0.135 / 0.18   # how much smaller the head is than the old round one (hair and hats scale with it)
 for s, sx in (('L', 1), ('R', -1)):
-    J['Shoulder_' + s] = ((0.27 * sx, 0, 1.48), (0.095, 0.09))
-    J['Elbow_' + s] = ((0.33 * sx, 0.0, 1.21), (0.065, 0.062))
-    J['Wrist_' + s] = ((0.36 * sx, 0.0, 0.97), (0.055, 0.05))
-    J['Hand_' + s] = ((0.37 * sx, 0.0, 0.86), (0.075, 0.04))     # a flat mitt
-    J['Hip_' + s] = ((0.115 * sx, 0, 0.94), (0.115, 0.115))
-    J['Knee_' + s] = ((0.125 * sx, 0, 0.52), (0.085, 0.09))
-    J['Ankle_' + s] = ((0.13 * sx, 0, 0.12), (0.075, 0.075))
-    J['Toe_' + s] = ((0.13 * sx, -0.17, 0.05), (0.09, 0.045))
+    J['Shoulder_' + s] = ((0.27 * sx, 0, 1.54), (0.085, 0.08))
+    J['Elbow_' + s] = ((0.32 * sx, 0.0, 1.25), (0.055, 0.052))
+    J['Wrist_' + s] = ((0.345 * sx, 0.0, 1.00), (0.045, 0.042))
+    J['Hand_' + s] = ((0.355 * sx, 0.0, 0.89), (0.065, 0.035))   # a flat mitt
+    J['Hip_' + s] = ((0.105 * sx, 0, 0.96), (0.10, 0.10))
+    J['Knee_' + s] = ((0.115 * sx, 0, 0.52), (0.075, 0.08))
+    J['Ankle_' + s] = ((0.12 * sx, 0, 0.12), (0.065, 0.065))
+    J['Toe_' + s] = ((0.12 * sx, -0.16, 0.05), (0.08, 0.04))
 E = [('Hips', 'Spine'), ('Spine', 'Chest'), ('Chest', 'Neck'), ('Neck', 'Head'), ('Head', 'HeadTop')]
 for s in 'LR':
     E += [('Chest', 'Shoulder_' + s), ('Shoulder_' + s, 'Elbow_' + s), ('Elbow_' + s, 'Wrist_' + s), ('Wrist_' + s, 'Hand_' + s),
@@ -189,6 +192,10 @@ def finalize_body(obj, arm):
 def rigid_mesh(name, bm, arm, uv_patch, head_pos):
     """A mesh that follows the Head bone rigidly (hair, headband)."""
     mesh = bpy.data.meshes.new(name)
+    # Hair and hats were modelled for the old, bigger head: shrink them about the head centre.
+    bmesh.ops.translate(bm, verts=bm.verts, vec=-Vector(head_pos))
+    bmesh.ops.scale(bm, verts=bm.verts, vec=(HK, HK, HK))
+    bmesh.ops.translate(bm, verts=bm.verts, vec=Vector(head_pos))
     uvl = bm.loops.layers.uv.new('UVMap')
     for f in bm.faces:
         f.smooth = True
@@ -295,6 +302,16 @@ class Rig:
         local = R.inverted() @ q.to_matrix() @ R
         pb = self.arm.pose.bones[bone]
         pb.rotation_quaternion = local.to_quaternion()
+        return q
+
+    def rot_about_tail(self, bone, fwd=0.0, out=0.0, twist=0.0, dx=0.0, dy=0.0, dz=0.0):
+        """Like rot(), but the bone's tip stays put (plus an offset) instead of its base. Used for the
+        root bone, whose base sits a metre behind the hips, so the whole body can tip over at the hips."""
+        q = self.rot(bone, fwd, out, twist)
+        b = self.arm.data.bones[bone]
+        v = b.tail_local - b.head_local
+        d = v - (q @ v)
+        self.move(bone, dx=d.x + dx, dy=-d.y + dy, dz=d.z + dz)
 
     def move(self, bone, dx=0.0, dy=0.0, dz=0.0):
         """Translation in the character's frame (dy = forward)."""
@@ -460,17 +477,19 @@ def build_animations(arm):
 
     def skydive(t):  # belly down, arms and legs out like a real skydiver
         s = math.sin(t * 2 * math.pi)
-        rig.rot('Spine', fwd=80)
-        rig.rot('Chest', fwd=6)
-        rig.rot('Head', fwd=-55)
-        rig.rot('UpperArm_L', fwd=-25, out=75 + 3 * s)
-        rig.rot('UpperArm_R', fwd=-25, out=75 - 3 * s)
-        rig.rot('Forearm_L', fwd=85)
-        rig.rot('Forearm_R', fwd=85)
-        rig.rot('Thigh_L', fwd=-25, out=22)
-        rig.rot('Thigh_R', fwd=-25, out=22)
-        rig.rot('Shin_L', fwd=-55 + 3 * s)
-        rig.rot('Shin_R', fwd=-55 - 3 * s)
+        # The whole body tips over at the hips so it lies flat, head first, chest to the ground.
+        rig.rot_about_tail('Hips', fwd=78 + 2 * s, dz=0.1)
+        rig.rot('Spine', fwd=8)
+        rig.rot('Chest', fwd=4)
+        rig.rot('Head', fwd=-45)
+        rig.rot('UpperArm_L', fwd=-30, out=80 + 3 * s)
+        rig.rot('UpperArm_R', fwd=-30, out=80 - 3 * s)
+        rig.rot('Forearm_L', fwd=70)
+        rig.rot('Forearm_R', fwd=70)
+        rig.rot('Thigh_L', fwd=-22, out=20)
+        rig.rot('Thigh_R', fwd=-22, out=20)
+        rig.rot('Shin_L', fwd=-60 + 4 * s)
+        rig.rot('Shin_R', fwd=-60 - 4 * s)
     make_clip(rig, 'skydive', 48, True, skydive)
 
     def glide(t):  # hanging from the glider handles, legs swinging a little
@@ -657,11 +676,11 @@ def paint_textures(body, only=None):
         region(np.ones(len(X), bool), tone)
         torso = np.abs(X) < 0.3
         region((Z < 1.05), pants * cloth[:, None][(Z < 1.05)].mean() if False else pants)            # pants
-        region((Z >= 1.05) & (Z < 1.56) & torso, shirt)                                               # shirt
+        region((Z >= 1.05) & (Z < 1.62) & torso, shirt)                                               # shirt
         region((Z >= 1.05) & (np.abs(X) >= 0.3) & (Z > 1.22), shirt)                                  # sleeves
         region((Z >= 1.05) & (np.abs(X) >= 0.3) & (Z <= 1.22), tone)                                  # forearms
         # Shirt pattern.
-        shirt_area = ((Z >= 1.05) & (Z < 1.56) & torso) | ((Z >= 1.05) & (np.abs(X) >= 0.3) & (Z > 1.22))
+        shirt_area = ((Z >= 1.05) & (Z < 1.62) & torso) | ((Z >= 1.05) & (np.abs(X) >= 0.3) & (Z > 1.22))
         second = shirt * 0.6 + accent * 0.4
         if pattern == 1:    # stripes
             region(shirt_area & (np.sin(Z * 55) > 0.3), second)
@@ -690,6 +709,24 @@ def paint_textures(body, only=None):
             region(shirt_area & (Z < fh - 0.08), accent * 0.75 + np.array((0.3, 0.05, 0.0)) * 0.25, 1)
         elif pattern == 7:  # sash across the chest
             region(shirt_area & (np.abs(X + (Z - 1.3) * 0.8) < 0.06) & (front > -0.3), accent, 1)
+        elif pattern == 8:  # diagonal racing stripes
+            region(shirt_area & (np.sin((X + Z) * 48) > 0.55), second)
+            region(shirt_area & (np.sin((X + Z) * 48) > 0.85), accent, 1)
+        elif pattern == 9:  # plaid
+            a_ = (np.sin(X * 70) > 0.4); b_ = (np.sin(Z * 70) > 0.4)
+            region(shirt_area & (a_ ^ b_), second)
+            region(shirt_area & a_ & b_, shirt * 0.55)
+        elif pattern == 10:  # two-tone: one half of the shirt in the second colour
+            region(shirt_area & (X * (1 if skin_index % 2 else -1) > 0.0), second)
+            region(shirt_area & (np.abs(X) < 0.012), accent, 1)
+        elif pattern == 11:  # chevrons pointing up
+            region(shirt_area & (np.sin((Z + 0.5 * np.abs(X)) * 50) > 0.4), second)
+        elif pattern == 12:  # lightning bolt down the chest
+            bolt = (np.abs(X - 0.06 * np.sign(np.sin((Z - 1.1) * 20))) < 0.035) & (Z > 1.1) & (Z < 1.52) & (front > 0.4)
+            region(shirt_area & bolt, accent, 1)
+        elif pattern == 13:  # panelled jacket: darker shoulders and side panels, light centre
+            region(shirt_area & ((np.abs(X) > 0.2) | (Z > 1.5)), shirt * 0.6)
+            region(shirt_area & (np.abs(X) < 0.08) & (Z < 1.5), second)
         region((Z < 1.0) & (np.abs(X) > 0.3), dark)                                                   # gloves
         region((Z < 0.21), dark)                                                                      # boots
         region((Z < 0.08), dark * 0.6)                                                                # soles
@@ -704,38 +741,114 @@ def paint_textures(body, only=None):
         for sx in (1, -1):
             sh = np.array(J['Shoulder_L'][0]) * np.array((sx, 1, 1))
             ds = np.sqrt((X - sh[0]) ** 2 + (Y - sh[1]) ** 2 + (Z - sh[2]) ** 2)
-            region((ds < 0.135) & (Z > 1.38), accent, 1)
+            region((ds < 0.125) & (Z > 1.44), accent, 1)
         region((Z >= 1.30) & (Z < 1.35) & torso & (front > -0.2), accent, 1)
-        region((Z >= 1.49) & (Z < 1.56) & torso, accent, 1)
+        region((Z >= 1.55) & (Z < 1.62) & torso, accent, 1)
         region((Z >= 0.19) & (Z < 0.23), accent, 1)
         region((Z >= 0.98) & (Z < 1.01) & (np.abs(X) > 0.3), accent, 1)
         # Chest emblem: a circle on the upper chest.
-        em = np.sqrt((X * 1.1) ** 2 + (Z - 1.42) ** 2)
+        em = np.sqrt((X * 1.1) ** 2 + (Z - 1.46) ** 2)
         region((em < 0.055) & (front > 0.5) & torso, accent, 1)
         region((em < 0.03) & (front > 0.5) & torso, shirt, 0)
-        # Head: hair on the top and back.
-        head = Z > 1.6
+        # Head: hair on the top and back. Everything is measured from the head joint so the
+        # face follows the head when the proportions change.
+        hz = J['Head'][0][2]
+        head = Z > hz - 0.14 * HK
         region(head, tone)
-        hairline = 1.86 - 0.05 * np.clip(front, 0, 1)
-        hair_cond = head & ((Z > hairline) | ((Y > 0.09) & (Z > 1.70)) | ((np.abs(X) > 0.16) & (Z > 1.78)))
+        hairline = hz + 0.12 * HK - 0.05 * HK * np.clip(front, 0, 1)
+        hair_cond = head & ((Z > hairline) | ((Y > 0.09 * HK) & (Z > hz - 0.04 * HK)) | ((np.abs(X) > 0.16 * HK) & (Z > hz + 0.04 * HK)))
         region(hair_cond, hair, 0)
         # Face: eyes (white + pupil), brows, mouth.
         for sx in (1, -1):
-            ex, ez = 0.078 * sx, 1.755
-            de = np.sqrt(((X - ex) / 0.042) ** 2 + ((Z - ez) / 0.030) ** 2)
+            ex, ez = 0.078 * HK * sx, hz + 0.015 * HK
+            de = np.sqrt(((X - ex) / (0.042 * HK)) ** 2 + ((Z - ez) / (0.030 * HK)) ** 2)
             region((de < 1.0) & (front > 0.25) & head, np.array((0.97, 0.97, 0.97)))
-            dp = np.sqrt(((X - ex - 0.006 * sx) / 0.02) ** 2 + ((Z - ez) / 0.022) ** 2)
+            dp = np.sqrt(((X - ex - 0.006 * HK * sx) / (0.02 * HK)) ** 2 + ((Z - ez) / (0.022 * HK)) ** 2)
             region((dp < 1.0) & (front > 0.25) & head, np.array((0.07, 0.06, 0.08)))
-            dh = np.sqrt(((X - ex - 0.012 * sx) / 0.007) ** 2 + ((Z - ez - 0.008) / 0.007) ** 2)
+            dh = np.sqrt(((X - ex - 0.012 * HK * sx) / (0.007 * HK)) ** 2 + ((Z - ez - 0.008 * HK) / (0.007 * HK)) ** 2)
             region((dh < 1.0) & (front > 0.25) & head, np.array((0.95, 0.95, 0.95)))
-            brow_z = 1.80 + (np.abs(X) - 0.078) * 0.25 * -1
-            region((np.abs(Z - brow_z) < 0.009) & (np.abs(X - ex) < 0.05) & (front > 0.25) & head & ~hair_cond, hair * 0.7)
-        mouth_z = 1.675 + 0.1 * (X ** 2) * 10
-        region((np.abs(Z - mouth_z) < 0.006) & (np.abs(X) < 0.045) & (front > 0.3) & head, np.array((0.45, 0.2, 0.2)))
-        # A little shading: darker toward the bottom of each body part and a cloth weave.
-        shade = 0.92 + 0.08 * np.clip(N[:, 2] * 0.5 + 0.5, 0, 1)
-        col *= shade[:, None]
-        col *= (0.985 + 0.03 * noise)[:, None]
+            brow_z = hz + 0.06 * HK - (np.abs(X) - 0.078 * HK) * 0.25
+            region((np.abs(Z - brow_z) < 0.009 * HK) & (np.abs(X - ex) < 0.05 * HK) & (front > 0.25) & head & ~hair_cond, hair * 0.7)
+        mouth_z = hz - 0.065 * HK + (X / HK) ** 2
+        region((np.abs(Z - mouth_z) < 0.006 * HK) & (np.abs(X) < 0.045 * HK) & (front > 0.3) & head, np.array((0.45, 0.2, 0.2)))
+        # ---- details: seams, pockets, zips, laces and such. Thin dark lines are a cheap way to make
+        # flat colour look like sewn clothing.
+        side = np.abs(N[:, 0]) > 0.8     # texels on the outer side of a limb / torso
+        is_shirt = (Z >= 1.05) & (Z < 1.62) & torso
+        leg = (Z < 0.98) & (np.abs(X) < 0.3)
+        arm = (Z >= 1.0) & (np.abs(X) >= 0.3)
+        seam = lambda cond: region(cond, col[cond] * 0.72)
+        seam(is_shirt & (np.abs(X) < 0.006) & (front > 0.5) & (Z > 1.08) & (Z < 1.55))                 # front zip
+        seam(is_shirt & (np.abs(np.abs(X) - 0.012) < 0.004) & (front > 0.5) & (Z > 1.08) & (Z < 1.55))  # zip tape
+        seam(is_shirt & side & (np.abs(Z - 1.2) < 0.5))                                                  # side seams
+        seam(is_shirt & (np.abs(Z - 1.075) < 0.006))                                                     # hem
+        seam(arm & (np.abs(Z - 1.24) < 0.006))                                                           # sleeve cuff
+        seam(arm & side & (Z > 1.26))                                                                    # sleeve seam
+        seam(leg & side)                                                                                 # outer leg seam
+        seam(leg & (np.abs(X) < 0.02) & (Z > 0.75) & (Z < 0.98) & (front > 0.5))                        # fly
+        for sx in (1, -1):                                                                               # pockets
+            pk = (np.abs(X - 0.09 * sx) < 0.045) & (Z > 0.82) & (Z < 0.95) & (front > 0.45) & leg
+            edge = pk & ((np.abs(np.abs(X - 0.09 * sx) - 0.045) < 0.006) | (np.abs(Z - 0.82) < 0.006))
+            seam(edge)
+            region(pk & (np.abs(Z - 0.935) < 0.008) & (np.abs(X - 0.09 * sx) < 0.03), col[pk & (np.abs(Z - 0.935) < 0.008) & (np.abs(X - 0.09 * sx) < 0.03)] * 0.8)
+            bk = (np.abs(X - 0.09 * sx) < 0.045) & (Z > 0.84) & (Z < 0.94) & (front < -0.45) & leg
+            seam(bk & ((np.abs(np.abs(X - 0.09 * sx) - 0.045) < 0.006) | (np.abs(Z - 0.84) < 0.006) | (np.abs(Z - 0.94) < 0.006)))
+        # Knee pad rims.
+        for sx in (1, -1):
+            kn = np.array(J['Knee_L'][0]) * np.array((sx, 1, 1))
+            dk = np.sqrt((X - kn[0]) ** 2 + (Z - kn[2]) ** 2)
+            seam((np.abs(dk - 0.085) < 0.007) & (front > 0.1) & (Z < 1.0))
+            region((dk < 0.05) & (front > 0.4) & (Z < 1.0), pants * 0.5, 0)
+        # Boots: laces, tongue and a welt above the sole.
+        boot = Z < 0.21
+        region(boot & (np.abs(Z - 0.085) < 0.006), dark * 1.8, 0)                                        # welt
+        region(boot & (Z > 0.1) & (Z < 0.2) & (np.abs(np.sin(Z * 190)) > 0.85) & (front > 0.55), np.array((0.55, 0.55, 0.58)), 0)  # laces
+        region(boot & (Z > 0.1) & (np.abs(X - np.round(X / 0.24) * 0.24) < 0.004) & (front > 0.55), dark * 1.6, 0)  # lace loop line
+        # Gloves: knuckle pad and a strap at the wrist.
+        glove = (Z < 1.0) & (np.abs(X) > 0.3)
+        region(glove & (Z > 0.95) & (Z < 0.975), accent * 0.8 + dark * 0.2, 1)
+        region(glove & (Z < 0.9) & (front > 0.3), dark * 1.5, 0)
+        # Collar fold and a stitched shoulder yoke.
+        region(is_shirt & (Z > 1.59) & (front > -0.5), shirt * 0.55, 0)
+        seam(is_shirt & (np.abs(Z - 1.50) < 0.005) & (front < -0.2))
+        # Face: brow ridge shadow, cheek colour, nose and chin shading, lips.
+        hz = J['Head'][0][2]
+        ck = 0.9 * HK
+        cheeks = head & (np.abs(np.abs(X) - 0.085 * HK) < 0.035 * HK) & (np.abs(Z - (hz - 0.03 * HK)) < 0.03 * HK) & (front > 0.3)
+        col[cheeks] = col[cheeks] * 0.92 + np.array((0.9, 0.35, 0.35)) * 0.08
+        nose = head & (np.abs(X) < 0.012 * HK) & (Z > hz - 0.05 * HK) & (Z < hz + 0.01 * HK) & (front > 0.8)
+        col[nose] *= 0.93
+        nostril = head & (np.abs(np.abs(X) - 0.012 * HK) < 0.006 * HK) & (np.abs(Z - (hz - 0.05 * HK)) < 0.005 * HK) & (front > 0.7)
+        col[nostril] *= 0.7
+        lid = head & (np.abs(X) < 0.13 * HK) & (np.abs(X) > 0.03 * HK) & (Z > hz + 0.043 * HK) & (Z < hz + 0.052 * HK) & (front > 0.3) & ~hair_cond
+        col[lid] *= 0.85
+        chin = head & (Z < hz - 0.11 * HK) & (front > 0.2)
+        col[chin] *= 0.9
+        ears = head & (np.abs(X) > 0.11 * HK) & (np.abs(Z - hz) < 0.03 * HK) & (np.abs(front) < 0.4)
+        col[ears] *= 0.93
+        # Hair: strands.
+        strand = 0.85 + 0.15 * (0.5 + 0.5 * np.sin(X * 420 + Y * 260 + Z * 90) * np.sin(Z * 310 - X * 150))
+        col[hair_cond] *= strand[hair_cond][:, None]
+        # ---- shading: a soft top-down light, darker in the crevices (armpits, crotch, under the
+        # chin and the belt), a cloth weave and a little grain.
+        shade = 0.90 + 0.10 * np.clip(N[:, 2] * 0.5 + 0.5, 0, 1)
+        ao = np.ones(len(X))
+        for sx in (1, -1):
+            sh = np.array(J['Shoulder_L'][0]) * np.array((sx, 1, 1))
+            pit = np.sqrt((X - sh[0]) ** 2 + (Z - sh[2] + 0.14) ** 2)
+            ao *= 1.0 - 0.35 * np.clip(1.0 - pit / 0.12, 0, 1)
+        crotch = np.sqrt((X * 1.6) ** 2 + (Z - 0.95) ** 2)
+        ao *= 1.0 - 0.3 * np.clip(1.0 - crotch / 0.1, 0, 1)
+        ao *= 1.0 - 0.25 * np.clip(1.0 - np.abs(Z - 1.63) / 0.05, 0, 1) * (np.abs(X) < 0.12)       # under the chin
+        ao *= 1.0 - 0.2 * np.clip(1.0 - np.abs(Z - 1.07) / 0.03, 0, 1) * torso                     # under the belt
+        ao *= 1.0 - 0.15 * np.clip(1.0 - np.abs(Z - 1.25) / 0.04, 0, 1) * (np.abs(X) >= 0.3)       # inside the elbow
+        weave = 1.0 + 0.035 * np.sin(X * 900 + Y * 300) * np.sin(Z * 900 + Y * 200)
+        weave = np.where((Z < 1.62) & ~head & ~boot & ~glove, weave, 1.0)
+        col *= (shade * ao * weave)[:, None]
+        col *= (0.98 + 0.04 * noise)[:, None]
+        # Leather and metal pieces are a touch glossy: lighten their tops a little more.
+        hard = boot | glove
+        col[hard] *= (0.95 + 0.12 * np.clip(N[hard, 2], 0, 1))[:, None]
 
         img = np.zeros((TEX, TEX, 4), dtype=np.float32)
         img[ys, xs, :3] = np.clip(col, 0, 1)

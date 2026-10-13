@@ -29,6 +29,36 @@ void Game::updatePlayer(const InputState& in, float dt) {
     if (player.yaw > PI) player.yaw -= 2 * PI;
     if (player.yaw < -PI) player.yaw += 2 * PI;
 
+    // Knocked: you can only look around and crawl.
+    if (player.down) {
+        player.ads = false;
+        player.sprinting = false;
+        player.crouched = true;
+        prompt = InteractPrompt();
+        updateCamera();
+        Body& b = player.body;
+        b.height = 0.9f;
+        Vec3 fwd(std::sin(player.yaw), 0, std::cos(player.yaw));
+        Vec3 right(std::cos(player.yaw), 0, -std::sin(player.yaw));
+        Vec3 wish = fwd * (float)((in.forward ? 1 : 0) - (in.back ? 1 : 0)) + right * (float)((in.right ? 1 : 0) - (in.left ? 1 : 0));
+        if (length(wish) > 0.01f) wish = normalize(wish);
+        Vec3 target = wish * CRAWL_SPEED;
+        Vec3 hv(b.vel.x, 0, b.vel.z);
+        Vec3 diff = target - hv;
+        float dl = length(diff), maxChange = (b.grounded ? 30.0f : 6.0f) * dt;
+        if (dl > maxChange) diff = diff * (maxChange / dl);
+        b.vel.x += diff.x;
+        b.vel.z += diff.z;
+        std::vector<AABB> others;
+        collectActorBoxes(others, false, -1);
+        Vec3 before = b.pos;
+        world.moveBody(b, dt, others);
+        checkLanding(b, PLAYER_ACTOR_ID, dt);
+        player.walkPhase += lengthXZ(b.pos - before) * 2.4f;
+        updateCamera();
+        return;
+    }
+
     tickGuns(dt);
     player.swingCooldown = std::max(0.0f, player.swingCooldown - dt);
     player.swingAnim = std::max(0.0f, player.swingAnim - dt);

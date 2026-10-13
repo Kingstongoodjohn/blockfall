@@ -196,6 +196,17 @@ bool Game::actorAlive(int id) const {
     if (id >= 0 && id < (int)bots.size()) return bots[id].alive;
     return false;
 }
+bool Game::actorDown(int id) const {
+    if (id == PLAYER_ACTOR_ID) return player.alive && player.down;
+    if (id >= 0 && id < (int)bots.size()) return bots[id].alive && bots[id].down;
+    return false;
+}
+bool Game::teamStanding(int team, int except) const {
+    if (team == 0 && except != PLAYER_ACTOR_ID && player.alive && !player.down) return true;
+    for (const Bot& b : bots)
+        if (b.team == team && b.index != except && b.alive && !b.down) return true;
+    return false;
+}
 Vec3 Game::actorPos(int id) const {
     if (id == PLAYER_ACTOR_ID) return player.body.pos;
     if (id >= 0 && id < (int)bots.size()) return bots[id].body.pos;
@@ -223,6 +234,7 @@ void Game::update(const InputState& in, float dt) {
     updateBus(in, dt);
     if (player.alive && dropPhase == DropPhase::Landed) updatePlayer(in, dt);
     updateBots(dt);
+    updateKnocked(dt);
     if (!player.alive) updateSpectate();
     updatePoi();
     settleBuilds();
@@ -254,19 +266,30 @@ void Game::update(const InputState& in, float dt) {
                        damageStacks.end());
     for (auto& t : tracers) t.age += dt;
     for (auto& m : killFeed) m.age += dt;
-    // Shockwave grenades fly in an arc and go off when they land, hit something, or after a second.
+    // Shockwave grenades fly in an arc, stop where they land (or hit something), sit there for
+    // SHOCKWAVE_FUSE seconds, then go off.
     for (Grenade& gr : grenades) {
         if (!gr.alive) continue;
+        gr.age += dt;
+        if (gr.fuse >= 0) {
+            gr.fuse -= dt;
+            if (gr.fuse <= 0) {
+                explodeShockwave(gr.pos);
+                gr.alive = false;
+            }
+            continue;
+        }
         Vec3 next = gr.pos + gr.vel * dt;
         gr.vel.y -= 18.0f * dt;
-        gr.age += dt;
         HitInfo h;
         Vec3 d = next - gr.pos;
         float len = length(d);
         bool hit = len > 1e-4f && world.raycast(Ray{gr.pos, d / len}, len, h, false);
-        if (hit || next.y <= world.terrainHeight(next.x, next.z) || gr.age > 1.1f) {
-            explodeShockwave(hit ? h.point : next);
-            gr.alive = false;
+        float ground = world.terrainHeight(next.x, next.z);
+        if (hit || next.y <= ground || gr.age > 4.0f) {
+            gr.pos = hit ? h.point + h.normal * 0.15f : Vec3(next.x, std::max(next.y, ground + 0.15f), next.z);
+            gr.vel = Vec3();
+            gr.fuse = SHOCKWAVE_FUSE;
         } else {
             gr.pos = next;
         }
@@ -324,6 +347,15 @@ void Game::updateCamera() {
     bool sniperZoom = player.ads && held.kind == ItemKind::Gun && held.gun == GunType::Sniper;
     setCameraFrom(player.eyePivot(), player.yaw, player.pitch, player.ads,
                   sniperZoom ? 30.0f : (player.ads ? 55.0f : 75.0f));
+    // The bus is not part of the world, so the wall check can't keep the camera out of it.
+    // Keep the eye above the roof while you stand on it (looking up used to put it inside).
+    if (player.alive && dropPhase == DropPhase::OnBus) {
+        float roofTop = bus.pos().y + 2.9f + 0.4f;
+        if (camera.eye.y < roofTop) {
+            camera.eye.y = roofTop;
+            camera.aimRay.origin = camera.eye;
+        }
+    }
 }
 
 void Game::updatePoi() {
@@ -532,7 +564,8 @@ void Game::settleBuilds() {
 // Stage table: wait, then shrink. Radius and timings get tighter each stage.
 void Game::startStormStage(int stage) {
     static const struct { float wait, shrink, radius, dps; } stages[] = {
-        {90, 80, 300, 1}, {60, 60, 170, 1}, {45, 45, 90, 2}, {30, 35, 45, 3}, {20, 30, 18, 5}, {15, 30, 0, 8},
+        // About 12 minutes of storm in all (waits 445 s + shrinks 280 s), then the last circle closes.
+        {150, 80, 300, 1}, {105, 60, 170, 1}, {75, 45, 90, 2}, {55, 35, 45, 3}, {35, 30, 18, 5}, {25, 30, 0, 8},
     };
     const int n = (int)(sizeof(stages) / sizeof(stages[0]));
     storm.stage = std::min(stage, n - 1);
@@ -551,7 +584,7 @@ void Game::startStormStage(int stage) {
 }
 
 void Game::updateStorm(float dt) {
-    static const float shrinkTimes[] = {50, 40, 30, 25, 25, 30};
+    static const float shrinkTimes[] = {80, 60, 45, 35, 30, 30};
     Storm& st = storm;
     st.timer -= dt;
     if (!st.shrinking && st.timer <= 0) {
@@ -674,6 +707,20 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
     const bool byPlayer = attacker == PLAYER_ACTOR_ID;
     std::string weaponTag = (weapon && *weapon) ? std::string(" (") + weapon + ")" : "";
 
+    // Knocked players take the hit on their down-health instead.
+    if (actorDown(victim)) {
+        float& dh = victim == PLAYER_ACTOR_ID ? player.downHealth : bots[victim].downHealth;
+        dh -= amount;
+        if (victim == PLAYER_ACTOR_ID) player.hurtTimer = 0.35f;
+        else bots[victim].hurtTimer = 1.5f;
+        if (byPlayer) {
+            damageNumbers.push_back({at, (int)std::lround(amount), Vec4(1, 1, 1, 1), 0, false});
+            hitMarker = 0.18f;
+        }
+        if (dh <= 0) { dh = 0; eliminate(victim, attacker, weapon); }
+        return amount;
+    }
+
     if (victim == PLAYER_ACTOR_ID) {
         float toShield = std::min(player.shield, amount);
         player.shield -= toShield;
@@ -684,12 +731,8 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
         if (player.medkitTimer >= 0 && !stormTick) player.medkitTimer = -1;
         if (player.health <= 0) {
             player.health = 0;
-            player.alive = false;
-            player.mode = Mode::Combat;
-            if (attacker >= 0 && attacker < (int)bots.size()) bots[attacker].kills++;
-            addKillMessage(attacker == NO_TARGET ? (std::string(weapon) == "FALL" ? "YOU FELL TO YOUR DEATH" : "YOU WERE ELIMINATED")
-                                                 : actorName(attacker) + " ELIMINATED YOU" + weaponTag,
-                           Vec4(1, 0.35f, 0.3f, 1));
+            if (knockModes() && teamStanding(0, PLAYER_ACTOR_ID)) knock(PLAYER_ACTOR_ID, attacker, weapon);
+            else eliminate(PLAYER_ACTOR_ID, attacker, weapon);
         }
         return amount;
     }
@@ -732,7 +775,67 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
         st->pos = b.body.pos + Vec3(0, 2.4f, 0);
     }
     if (b.health <= 0) {
+        b.health = 0;
+        if (knockModes() && teamStanding(b.team, b.index)) knock(victim, attacker, weapon);
+        else eliminate(victim, attacker, weapon);
+    }
+    return amount;
+}
+
+// ------------------------------------------------------------------ knocked / eliminated
+void Game::knock(int victim, int attacker, const char* weapon) {
+    std::string weaponTag = (weapon && *weapon) ? std::string(" (") + weapon + ")" : "";
+    if (victim == PLAYER_ACTOR_ID) {
+        if (player.mode == Mode::Edit) cancelEdit();
+        player.down = true;
+        player.downHealth = KNOCK_HEALTH;
+        player.reviveProgress = 0;
+        player.lastAttacker = attacker;
+        player.mode = Mode::Combat;
+        player.ads = false;
+        player.sprinting = false;
+        player.medkitTimer = -1;
+        player.gunStates[player.selected].reloadTimer = 0;
+        addKillMessage(attacker == NO_TARGET ? "YOU WERE KNOCKED" : actorName(attacker) + " KNOCKED YOU" + weaponTag, Vec4(1, 0.55f, 0.3f, 1));
+        showToast("KNOCKED! CRAWL TO YOUR TEAM - THEY CAN REVIVE YOU", Vec4(1, 0.6f, 0.4f, 1));
+        return;
+    }
+    Bot& b = bots[victim];
+    b.down = true;
+    b.downHealth = KNOCK_HEALTH;
+    b.reviveProgress = 0;
+    b.lastAttacker = attacker;
+    b.healTimer = -1;
+    b.healing = ItemKind::None;
+    b.state = AIState::Wander;
+    b.stateTime = 0;
+    b.targetId = NO_TARGET;
+    b.canSee = false;
+    Vec4 col(1, 1, 1, 0.9f);
+    if (b.team == 0) col = Vec4(1, 0.55f, 0.45f, 1);
+    else if (actorTeam(attacker) == 0) col = Vec4(0.55f, 0.85f, 1, 1);
+    if (attacker == PLAYER_ACTOR_ID) addKillMessage("YOU KNOCKED " + b.name + weaponTag, Vec4(1, 1, 1, 1));
+    else addKillMessage(actorName(attacker) + " KNOCKED " + b.name + weaponTag, col);
+}
+
+void Game::eliminate(int victim, int attacker, const char* weapon) {
+    const bool byPlayer = attacker == PLAYER_ACTOR_ID;
+    std::string weaponTag = (weapon && *weapon) ? std::string(" (") + weapon + ")" : "";
+    int team = actorTeam(victim);
+    if (victim == PLAYER_ACTOR_ID) {
+        if (player.mode == Mode::Edit) cancelEdit();
+        player.health = 0;
+        player.alive = false;
+        player.down = false;
+        player.mode = Mode::Combat;
+        if (attacker >= 0 && attacker < (int)bots.size()) bots[attacker].kills++;
+        addKillMessage(attacker == NO_TARGET ? (std::string(weapon) == "FALL" ? "YOU FELL TO YOUR DEATH" : "YOU WERE ELIMINATED")
+                                             : actorName(attacker) + " ELIMINATED YOU" + weaponTag,
+                       Vec4(1, 0.35f, 0.3f, 1));
+    } else {
+        Bot& b = bots[victim];
         b.alive = false;
+        b.down = false;
         b.health = 0;
         Item drop = b.gun;
         drop.count = gunStats(drop.gun).magSize;
@@ -752,7 +855,55 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
             addKillMessage(actorName(attacker) + " ELIMINATED " + b.name + weaponTag, col);
         }
     }
-    return amount;
+    // Nobody left standing on that team? The knocked ones are out too (the team is wiped).
+    if (team >= 0 && !teamStanding(team, NO_TARGET)) {
+        if (team == 0 && player.alive && player.down) eliminate(PLAYER_ACTOR_ID, attacker, "TEAM WIPED");
+        for (Bot& b : bots)
+            if (b.team == team && b.alive && b.down) eliminate(b.index, attacker, "TEAM WIPED");
+    }
+}
+
+void Game::revive(int id) {
+    if (id == PLAYER_ACTOR_ID) {
+        player.down = false;
+        player.health = REVIVE_HEALTH;
+        player.reviveProgress = 0;
+        showToast("REVIVED! GET BACK IN THE FIGHT", Vec4(0.5f, 1, 0.6f, 1));
+        addKillMessage("YOU WERE REVIVED", Vec4(0.5f, 1, 0.6f, 1));
+        return;
+    }
+    Bot& b = bots[id];
+    b.down = false;
+    b.body.height = 1.8f;
+    b.health = REVIVE_HEALTH;
+    b.reviveProgress = 0;
+    b.hurtTimer = 0;
+    addKillMessage(b.name + " WAS REVIVED", b.team == 0 ? Vec4(0.5f, 1, 0.6f, 1) : Vec4(1, 1, 1, 0.9f));
+}
+
+void Game::addRevive(int id, float dt) {
+    if (!actorDown(id)) return;
+    float& prog = id == PLAYER_ACTOR_ID ? player.reviveProgress : bots[id].reviveProgress;
+    bool& flag = id == PLAYER_ACTOR_ID ? player.revivedThisFrame : bots[id].revivedThisFrame;
+    flag = true;
+    prog += dt / REVIVE_TIME;
+    if (prog >= 1.0f) revive(id);
+}
+
+// Bleeding out, and revive progress that fades when nobody is helping.
+void Game::updateKnocked(float dt) {
+    auto tick = [&](float& downHealth, float& prog, bool& flag, int id, int lastAttacker) {
+        if (!flag) prog = std::max(0.0f, prog - dt / (REVIVE_TIME * 0.5f));
+        flag = false;
+        downHealth -= KNOCK_BLEED * dt;
+        if (downHealth <= 0) {
+            downHealth = 0;
+            eliminate(id, lastAttacker, "BLED OUT");
+        }
+    };
+    if (player.alive && player.down) tick(player.downHealth, player.reviveProgress, player.revivedThisFrame, PLAYER_ACTOR_ID, player.lastAttacker);
+    for (Bot& b : bots)
+        if (b.alive && b.down) tick(b.downHealth, b.reviveProgress, b.revivedThisFrame, b.index, b.lastAttacker);
 }
 
 void Game::showToast(const std::string& s, const Vec4& c) {
@@ -916,7 +1067,21 @@ void Game::updateInteract(const InputState& in, float dt) {
         }
     }
 
-    if (bestChest >= 0) {
+    // A knocked teammate close by? Reviving comes before everything else.
+    int bestDown = -1;
+    if (!player.down) {
+        float bd = REVIVE_RANGE;
+        for (const Bot& b : bots) {
+            if (!b.alive || !b.down || b.team != 0) continue;
+            float d = length(b.body.pos - player.body.pos);
+            if (d < bd) { bd = d; bestDown = b.index; }
+        }
+    }
+    if (bestDown >= 0) {
+        next.kind = InteractPrompt::Revive;
+        next.index = bestDown;
+        next.text = "REVIVE " + bots[bestDown].name;
+    } else if (bestChest >= 0) {
         next.kind = InteractPrompt::OpenChest;
         next.index = bestChest;
         next.text = "OPEN CHEST";
@@ -947,6 +1112,12 @@ void Game::updateInteract(const InputState& in, float dt) {
     } else if (next.kind == InteractPrompt::PickUp && in.interactPressed) {
         pickup(next.index);
         next = InteractPrompt();
+    } else if (next.kind == InteractPrompt::Revive) {
+        if (in.interact) {
+            addRevive(next.index, dt);
+            if (!bots[next.index].down) next = InteractPrompt();
+            else next.progress = bots[next.index].reviveProgress;
+        }
     }
     prompt = next;
 }

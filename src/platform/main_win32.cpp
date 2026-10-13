@@ -135,9 +135,19 @@ struct Demo {
         if (f == 48) pendingShot = "03c_locker.bmp";
         if (f == 49) { fe.screen = Screen::Lobby; fe.invite("JUNO"); }
         if (f == 50) fe.startMatch();
-        if (f > 50 && f < 60) { g.player.pitch = -0.3f; g.player.yaw += 0.03f; }
+        if (f > 50 && f < 60) { g.player.pitch = 0.55f; g.player.yaw += 0.03f; }  // looking up: camera must stay above the roof
         if (f == 57) pendingShot = "04a_battle_bus.bmp";
-        if (f == 59) {
+        if (f >= 58 && f < 76) {
+            // Jump: hang in the air skydiving (held in place) long enough for the pose to blend in.
+            g.dropPhase = DropPhase::Skydive;
+            g.player.body.pos = g.bus.pos() + Vec3(0, -8.0f, 0);
+            g.player.body.vel = Vec3(0, -30.0f, 0);
+            g.player.pitch = -0.9f;
+            for (Bot& b : g.bots)
+                if (b.team == 0) { b.drop = DropPhase::Skydive; b.body.pos = g.player.body.pos + Vec3(3.0f + b.index * 2.0f, -2.0f, 4.0f); b.body.vel = Vec3(0, -30.0f, 0); }
+        }
+        if (f == 74) pendingShot = "04b_skydive.bmp";
+        if (f == 76) {
             g.landEveryone();
             // Keep the other squads busy far away for the photos.
             for (Bot& b : g.bots)
@@ -146,9 +156,9 @@ struct Demo {
             lookAt(g, mate + Vec3(0, 1.2f, 0) + (mate - g.player.body.pos) * 2.0f);
             g.player.pitch = -0.12f;
         }
-        if (f == 70) pendingShot = "04_squad_drop.bmp";
+        if (f == 86) pendingShot = "04_squad_drop.bmp";
         // Pickaxe on a tree.
-        if (f == 72) {
+        if (f == 88) {
             float best = 1e9f;
             for (size_t i = 0; i < g.world.statics.size(); ++i) {
                 const StaticBox& s = g.world.statics[i];
@@ -162,20 +172,20 @@ struct Demo {
             for (Bot& b : g.bots)
                 if (b.team == 0) park(g, b, g.player.body.pos + Vec3(-3.0f - b.index, 0, -2.0f));
         }
-        if (f > 72 && f < 140 && tree >= 0) {
+        if (f > 88 && f < 150 && tree >= 0) {
             const StaticBox& s = g.world.statics[tree];
             lookAt(g, Vec3(s.box.center().x, g.player.body.pos.y + 1.3f, s.box.center().z));
             hold(r, KEY_MOUSE_LEFT);
-            if (f == 73) press(r, KEY_MOUSE_LEFT);
+            if (f == 89) press(r, KEY_MOUSE_LEFT);
         }
-        if (f == 112) pendingShot = "05_pickaxe.bmp";
+        if (f == 128) pendingShot = "05_pickaxe.bmp";
         // Sprint until stamina is low.
-        if (f >= 145 && f < 336) {
+        if (f >= 152 && f < 336) {
             hold(r, 'W');
             hold(r, KEY_SHIFT);
             g.player.pitch = -0.1f;
         }
-        if (f == 145) g.player.yaw += 2.6f;
+        if (f == 152) g.player.yaw += 2.6f;
         if (f == 300) pendingShot = "06_sprint_stamina_epic.bmp";
         if (f == 301) fe.settings.gfx = GraphicsSettings::preset(0);
         if (f == 330) pendingShot = "06b_sprint_performance_preset.bmp";
@@ -249,6 +259,17 @@ struct Demo {
             g.player.shield = 100;  // keep the camera alive for the photos
             g.player.health = 100;
         }
+        if (f == 470) {
+            // A teammate gets knocked in front of you; hold E to revive them.
+            Bot& mate = g.bots[0];
+            Vec3 fwd(std::sin(g.player.yaw), 0, std::cos(g.player.yaw));
+            park(g, mate, g.player.body.pos + fwd * 2.4f + Vec3(fwd.z, 0, -fwd.x) * 1.2f);
+            mate.yaw = g.player.yaw;   // facing away, so the knocked pose doesn't tip into the camera
+            g.damageActor(mate.index, 500, false, mate.body.pos, NO_TARGET, "");
+        }
+        if (f > 470 && f < 500) hold(r, 'E');
+        if (f == 490) pendingShot = "07c_knocked_revive.bmp";
+        if (f == 500) g.revive(0);
         if (f == 440) press(r, 'R');  // reload animation
         if (f == 452) pendingShot = "07b_reload_anim.bmp";
         if (f == 460) pendingShot = "07_teamfight_icons.bmp";

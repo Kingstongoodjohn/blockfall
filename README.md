@@ -11,6 +11,38 @@ Keep the `assets` folder next to `bin` - that's where the character model and sk
 
 If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. The game isn't signed with a paid certificate, which is why Windows warns about it.
 
+## What's new in v12 - athletic bodies, 64 skins, cleaner picture
+
+- **New body shape.** The character is built with athletic proportions like a modern shooter
+  skin: a smaller head, thin neck, broad shoulders, narrow waist, slim arms and long legs
+  (`tools/character/build_character.py`). Hair, hats and the face follow the new head.
+- **Better skin textures.** Every skin now has sewn-looking detail: a front zip, side and sleeve
+  seams, cuffs, a hem, pants pockets front and back, a fly, rimmed knee pads, boot laces and
+  welts, glove straps and knuckle pads, a folded collar, cheek colour, eyelids, nose and chin
+  shading, hair strands, cloth weave and soft shadows in the armpits, crotch, under the chin
+  and under the belt.
+- **64 skins** (up from 40) and 6 new shirt patterns: racing stripes, plaid, two-tone,
+  chevrons, a lightning bolt and a panelled jacket.
+- **Skydive fixed.** The whole body now tips over at the hips, so you fall belly-down, head
+  first, arms out and legs trailing - instead of standing up in the air.
+- **Battle bus fixed.** The camera can no longer drop inside the bus when you look up on the roof.
+- **Anti-aliasing redone.** High now renders at 2x resolution and downsamples (supersampling);
+  the temporal pass clips history in YCoCg colour space and sharpens only brightness, which
+  removes the rainbow fringes on dark edges.
+- **Knocked phase** in Duos, Trios and Squads (not Solos). When your health hits zero with a
+  teammate still standing you're knocked instead of out: you crawl slowly, can't shoot or build,
+  and bleed out over 40 s. A teammate holds **E** next to you for 5 s to pick you up (back at
+  30 hp). Enemies can finish you. AI squads revive each other too, and crawl toward their team.
+  When nobody on a team is left standing, its knocked players are out (team wiped).
+- **Shockwave fuse.** A shockwave stops where it lands, pulses blue for 1 second, then blows.
+- **Longer matches.** The storm takes about 12 minutes to close instead of 7, bots hit each
+  other softer and don't go looking for each other across the map in the first minute, so a
+  100-player lobby still has 80+ alive after a minute and a half and ends with a real final circle.
+- **Friends must be real.** You can only add a friend by the name of a real player account on
+  this PC (one made on the sign-in screen).
+- **No enemy health bars.** You only see your damage numbers; teammates still show theirs.
+- **Flat edit tiles.** The selection tiles on cones and ramps are flat 2D tiles on the surface.
+
 ## What's new in v11 - textures and skins
 
 - **Real high-res textures.** Every material now has a 2048 x 2048 albedo *and* normal map

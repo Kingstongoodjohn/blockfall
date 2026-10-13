@@ -1082,8 +1082,19 @@ static void testFrontEnd() {
     fe.frame(lost, DT, 1600, 900, 60, scene, hud);
     CHECK(fe.screen == Screen::Paused, "alt-tab pauses");
 
-    // Friends screen: type a name and press Enter to add.
+    // Friends screen: type a name and press Enter to add. Only real accounts can be added.
     fe.screen = Screen::Friends;
+    {
+        Account pal; std::string err;
+        CHECK(fe.accounts.create("PIXEL_PAL", "secret1", pal, err), "friend's account exists (%s)", err.c_str());
+        fe.frame(click(550, 285), DT, 1600, 900, 60, scene, hud);
+        RawInput t2; t2.text = "nobody_real";
+        fe.frame(t2, DT, 1600, 900, 60, scene, hud);
+        RawInput e2; e2.down[KEY_ENTER] = e2.pressed[KEY_ENTER] = true;
+        fe.frame(e2, DT, 1600, 900, 60, scene, hud);
+        CHECK(!fe.settings.hasFriend("NOBODY_REAL"), "a name with no account is not added as a friend");
+        fe.friendInputForTests().clear();
+    }
     fe.frame(click(550, 285), DT, 1600, 900, 60, scene, hud);  // focus the ADD A FRIEND field
     RawInput typed;
     typed.text = "pixel_pal";
@@ -1160,11 +1171,39 @@ static void testTeams() {
     std::printf("  bot vs bot: %s %.0f hp, %s %.0f hp after %.1f s\n", a.name.c_str(), a.health, c.name.c_str(), c.health, g2.time);
     CHECK(a.health + a.shield < 100 || c.health + c.shield < 100 || !a.alive || !c.alive, "bots shoot each other");
 
-    // Spectate your teammate after you go down; your team only loses when both are out.
+    // Knocked phase (team modes): the first "death" knocks you while a teammate is standing.
     Game g3;
     g3.startMatch(cfg);
+    for (Bot& b : g3.bots)   // keep the enemies out of this
+        if (b.team != 0) { b.body.pos = b.body.pos + Vec3(0, 0, -250); b.body.pos.y = g3.world.terrainHeight(b.body.pos.x, b.body.pos.z); }
     g3.damagePlayer(500);
     g3.update(InputState(), DT);
+    CHECK(g3.player.alive && g3.player.down && g3.player.downHealth > 90, "knocked instead of eliminated (down hp %.0f)", g3.player.downHealth);
+    {
+        // Your teammate comes over and picks you up.
+        Bot& mate = g3.bots[0];
+        mate.body.pos = g3.player.body.pos + Vec3(1.5f, 0, 0);
+        mate.state = AIState::Wander;
+        mate.hurtTimer = 0;
+        float t = 0;
+        for (int i = 0; i < 60 * 12 && g3.player.down; ++i, t += DT) g3.update(InputState(), DT);
+        CHECK(!g3.player.down && g3.player.alive && g3.player.health >= REVIVE_HEALTH - 1, "teammate revived you after %.1f s (hp %.0f)", t, g3.player.health);
+        CHECK(t > REVIVE_TIME - 0.5f, "a revive takes about %.0f s", REVIVE_TIME);
+        // You pick your teammate up: hold Interact next to them.
+        g3.damageActor(mate.index, 500, false, mate.body.pos, NO_TARGET, "");
+        CHECK(mate.alive && mate.down, "teammate knocked, not eliminated");
+        mate.body.pos = g3.player.body.pos + Vec3(1.2f, 0, 0);
+        InputState hold; hold.interact = true;
+        t = 0;
+        for (int i = 0; i < 60 * 8 && mate.down; ++i, t += DT) g3.update(hold, DT);
+        CHECK(!mate.down && mate.alive, "you revived your teammate after %.1f s", t);
+        // Bleeding out ends it. And when nobody on the team is standing, the knocked are out too.
+        g3.damagePlayer(500);
+        CHECK(g3.player.down, "knocked again");
+        g3.player.downHealth = 0.01f;
+        g3.update(InputState(), DT);
+        CHECK(!g3.player.alive, "bled out");
+    }
     CHECK(!g3.player.alive && g3.playerTeamAlive() && !g3.defeat() && g3.spectating == 0, "you're out, spectating RIVER");
     CHECK(length(g3.camera.eye - g3.bots[0].body.pos) < 5.0f, "camera follows the teammate");
     int enemyId = -1;
@@ -2009,6 +2048,12 @@ static void testFallShockBots() {
     fire.firePressed = fire.fire = true;
     g.update(fire, DT);
     CHECK(g.grenades.size() == 1 && g.player.slots[1].count == 1, "throwing a shockwave uses one");
+    // It lands, then sits there for a second before it goes off.
+    run(g, 20, none);
+    CHECK(g.grenades.size() == 1 && g.grenades[0].fuse > 0 && g.grenades[0].fuse <= SHOCKWAVE_FUSE && length(g.grenades[0].vel) < 1e-3f,
+          "landed and armed (fuse %.2f s)", g.grenades.empty() ? 0.0f : g.grenades[0].fuse);
+    run(g, 30, none);
+    CHECK(g.grenades.size() == 1 && g.player.body.pos.y < ground + 0.5f, "still on the ground half a second later");
     float peak = g.player.body.pos.y;
     run(g, 120, [&](int) { peak = std::max(peak, g.player.body.pos.y); return InputState(); });
     CHECK(g.grenades.empty() && peak > ground + 3.0f, "it went off and launched you %.1f m up", peak - ground);

@@ -168,21 +168,19 @@ void buildHud(const Game& g, float W, float H, float fps, const Bindings& binds,
         hud.text(sx, sy - 10 * ui, 3.6f * ui * pop, col, std::to_string((int)std::lround(d.total)), 1);
     }
 
-    // Teammate name tags (always), enemy health bars (when recently hit).
+    // Teammate name tags and health. Enemies never show a health bar - you only see the damage numbers.
     for (const Bot& b : g.bots) {
-        if (!b.alive) continue;
+        if (!b.alive || b.team != 0) continue;
         float sx, sy;
         if (!hud.project(g.camera, b.body.pos + Vec3(0, 2.3f, 0), sx, sy)) continue;
         float bw = 60 * ui, bh = 6 * ui;
         if (b.team == 0) {
             float dist = length(b.body.pos - g.camera.eye);
             float s = clampf(1.8f - dist * 0.01f, 1.2f, 1.8f) * ui;
-            hud.text(sx, sy - 18 * ui, s, Vec4(0.45f, 0.9f, 1, 0.95f), b.name, 1);
+            hud.text(sx, sy - 18 * ui, s, b.down ? Vec4(1, 0.6f, 0.35f, 1) : Vec4(0.45f, 0.9f, 1, 0.95f), b.down ? b.name + " - KNOCKED" : b.name, 1);
             hud.rect(sx - bw * 0.5f - 1, sy - 1, bw + 2, bh + 2, SHADOW);
-            hud.rect(sx - bw * 0.5f, sy, bw * clampf(b.health / 100.0f, 0, 1), bh, HEALTH_COL);
-        } else if (b.hurtTimer > 0) {
-            hud.rect(sx - bw * 0.5f - 1, sy - 1, bw + 2, bh + 2, SHADOW);
-            hud.rect(sx - bw * 0.5f, sy, bw * clampf(b.health / 100.0f, 0, 1), bh, HEALTH_COL);
+            if (b.down) hud.rect(sx - bw * 0.5f, sy, bw * clampf(b.downHealth / KNOCK_HEALTH, 0, 1), bh, Vec4(0.95f, 0.45f, 0.25f, 1));
+            else hud.rect(sx - bw * 0.5f, sy, bw * clampf(b.health / 100.0f, 0, 1), bh, HEALTH_COL);
         }
     }
 
@@ -267,8 +265,22 @@ void buildHud(const Game& g, float W, float H, float fps, const Bindings& binds,
         float bx = 30 * ui, bw = 320 * ui, bh = 22 * ui;
         float by = H - 40 * ui - bh;
         hud.rect(bx - 3, by - 3, bw + 6, bh + 6, PANEL);
-        hud.rect(bx, by, bw * clampf(p.health / PLAYER_MAX_HEALTH, 0, 1), bh, HEALTH_COL);
-        hud.text(bx + bw + 12 * ui, by + 1 * ui, 2.4f * ui, WHITE, std::to_string((int)std::ceil(p.health)));
+        if (p.down) {
+            // Knocked: the health bar becomes the bleed-out bar.
+            hud.rect(bx, by, bw * clampf(p.downHealth / KNOCK_HEALTH, 0, 1), bh, Vec4(0.95f, 0.45f, 0.25f, 1));
+            hud.text(bx + bw + 12 * ui, by + 1 * ui, 2.4f * ui, WHITE, std::to_string((int)std::ceil(p.downHealth)));
+            hud.text(W * 0.5f, H * 0.62f, 3.0f * ui, Vec4(1, 0.5f, 0.3f, 1), "KNOCKED", 1);
+            if (p.reviveProgress > 0) {
+                hud.text(W * 0.5f, H * 0.62f + 36 * ui, 1.8f * ui, Vec4(0.5f, 1, 0.6f, 1), "A TEAMMATE IS REVIVING YOU", 1);
+                hud.rect(W * 0.5f - 120 * ui, H * 0.62f + 62 * ui, 240 * ui, 8 * ui, SHADOW);
+                hud.rect(W * 0.5f - 120 * ui, H * 0.62f + 62 * ui, 240 * ui * clampf(p.reviveProgress, 0, 1), 8 * ui, Vec4(0.5f, 1, 0.6f, 1));
+            } else {
+                hud.text(W * 0.5f, H * 0.62f + 36 * ui, 1.8f * ui, Vec4(1, 0.8f, 0.6f, 1), "CRAWL TO YOUR TEAM - THEY CAN PICK YOU UP", 1);
+            }
+        } else {
+            hud.rect(bx, by, bw * clampf(p.health / PLAYER_MAX_HEALTH, 0, 1), bh, HEALTH_COL);
+            hud.text(bx + bw + 12 * ui, by + 1 * ui, 2.4f * ui, WHITE, std::to_string((int)std::ceil(p.health)));
+        }
         float sy = by - bh - 12 * ui;
         hud.rect(bx - 3, sy - 3, bw + 6, bh + 6, PANEL);
         hud.rect(bx, sy, bw * clampf(p.shield / PLAYER_MAX_SHIELD, 0, 1), bh, SHIELD_COL);
@@ -410,12 +422,13 @@ void buildHud(const Game& g, float W, float H, float fps, const Bindings& binds,
         // ---- interact prompt
         if (g.prompt.kind != InteractPrompt::None) {
             float py = cy + 110 * ui;
-            std::string txt = (g.prompt.kind == InteractPrompt::OpenChest ? "HOLD [" : "[") + key(binds, Action::Interact) +
+            bool hold = g.prompt.kind == InteractPrompt::OpenChest || g.prompt.kind == InteractPrompt::Revive;
+            std::string txt = (hold ? "HOLD [" : "[") + key(binds, Action::Interact) +
                               "] " + g.prompt.text;
             float tw = hud.textWidth(txt, 2.0f * ui);
             hud.rect(cx - tw * 0.5f - 10 * ui, py - 8 * ui, tw + 20 * ui, 32 * ui, PANEL);
             hud.text(cx, py, 2.0f * ui, WHITE, txt, 1);
-            if (g.prompt.kind == InteractPrompt::OpenChest && g.prompt.progress > 0) {
+            if (hold && g.prompt.progress > 0) {
                 hud.rect(cx - tw * 0.5f - 10 * ui, py + 26 * ui, (tw + 20 * ui) * clampf(g.prompt.progress, 0, 1), 4 * ui,
                          Vec4(1, 0.8f, 0.3f, 1));
             }

@@ -114,6 +114,7 @@ Vec4 mixColor(const Vec4& a, const Vec4& b, float t) {
 struct FigurePose {
     Vec3 feet;
     float yaw = 0;
+    bool knocked = false;    // down on hands and knees
     float walkPhase = 0;
     float moveAmount = 0;
     Vec4 shirt;
@@ -169,7 +170,9 @@ bool addSkinnedFigure(SceneList& s, const FigurePose& f) {
 
     Mat4 world[MAX_BONES];
     m->boneWorld(pose, world);
-    Mat4 root = Mat4::rotationY(f.yaw) * Mat4::translation(f.feet);
+    // Knocked: crouch pose tipped forward onto hands and knees.
+    Mat4 root = f.knocked ? Mat4::translation(Vec3(0, -0.05f, 0.25f)) * Mat4::rotationX(0.85f) * Mat4::rotationY(f.yaw) * Mat4::translation(f.feet)
+                          : Mat4::rotationY(f.yaw) * Mat4::translation(f.feet);
 
     CharacterDraw d;
     d.world = root;
@@ -730,6 +733,7 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
         f.held = &b.gun;
         f.hurt = b.hurtTimer > 1.35f ? 0.7f : 0.0f;
         f.anim = b.drop == DropPhase::Landed ? botAnim(g, b) : (b.drop == DropPhase::Glide ? Anim::Glide : Anim::Skydive);
+        if (b.down) { f.anim = Anim::Crouch; f.knocked = true; f.held = nullptr; }
         if (b.drop == DropPhase::Glide) addGlider(b.body.pos, b.yaw);
         f.animT = g.time + b.index * 0.7f;
         f.animKey = b.index + 1;
@@ -760,6 +764,7 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
         f.hurt = p.hurtTimer > 0.2f ? 0.5f : 0.0f;
         f.anim = g.dropPhase == DropPhase::Landed ? playerAnim(g)
                                                   : (g.dropPhase == DropPhase::OnBus ? Anim::Idle : (g.dropPhase == DropPhase::Glide ? Anim::Glide : Anim::Skydive));
+        if (p.down) { f.anim = Anim::Crouch; f.knocked = true; f.held = nullptr; }
         if (g.dropPhase == DropPhase::Glide) addGlider(p.body.pos, p.yaw);
         f.animKey = 0;
         f.clock = g.time;
@@ -791,6 +796,12 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
     for (const Grenade& gr : g.grenades) {
         if (!gr.alive) continue;
         s.opaque[MESH_SPHERE].push_back(inst(Mat4::scale(Vec3(0.3f, 0.3f, 0.3f)) * Mat4::translation(gr.pos), Vec4(0.35f, 0.75f, 1.0f, 1), 0.8f, MAT_METAL));
+        if (gr.fuse >= 0) {
+            // Armed: a blue glow that pulses faster as the fuse runs out.
+            float blink = 0.5f + 0.5f * std::sin(gr.age * (18.0f + 30.0f * (1.0f - gr.fuse / SHOCKWAVE_FUSE)));
+            float rad = 0.45f + 0.25f * blink;
+            s.transparent[MESH_SPHERE].push_back(inst(Mat4::scale(Vec3(rad, rad, rad)) * Mat4::translation(gr.pos), Vec4(0.5f, 0.85f, 1.0f, 0.25f + 0.35f * blink), 1.0f));
+        }
     }
     for (const ShockRing& r : g.shockRings) {
         float t = r.age / 0.6f;
