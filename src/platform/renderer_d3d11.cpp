@@ -205,7 +205,8 @@ float3 sampleNormal(float3 p, float3 n, int mat, float strength) {
     float3 bent = normalize(n + (blended - n * dot(blended, n)) * strength);
     return bent;
 }
-
+)"  // MSVC caps one string literal at ~16 KB; adjacent literals are joined, so split here.
+R"(
 // ---- sun shadow with PCF, softer with distance from the blocker on High
 float shadowFactor(float3 wpos, float3 n, float ndl) {
     int level = (int)gfx2.x;
