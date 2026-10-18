@@ -2,8 +2,26 @@
 build/
 build-win/
 build-linux/
+build-tests/
+out/
+dist/
 shots*/
 *.bmp
 __pycache__/
 *.obj
 *.o
+
+# Secrets: real values live in .env, never committed (.env.example lists the names)
+.env
+.env.*
+!.env.example
+
+# Python tools
+.venv/
+
+# Node (if ever used)
+node_modules/
+
+# Editors (Visual Studio "Open Folder" and VS Code local state)
+.vs/
+.vscode/
