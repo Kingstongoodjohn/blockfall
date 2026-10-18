@@ -95,6 +95,13 @@ float rampHeightAt(const Piece& p, float lx, float lz);
 // from the first tile round to the last; four tiles or one tile = back to straight stairs.
 // Stores the result in the piece (its direction, and `removed` for turn stairs).
 void applyStairEdit(Piece& p, uint16_t selected, int firstTile, int lastTile);
+// Wall edit shape rules (door / window / arch / half wall). Tiles are row*3+col, row 0 at the
+// bottom. A cut is valid if the removed tiles form one rectangle and every tile left standing
+// still reaches the bottom row through other kept tiles (nothing floats). No cut is valid;
+// cutting all 9 tiles is not.
+bool validWallEdit(uint16_t removed);
+// Same check for any piece type: only walls have shape rules, so other types always pass.
+bool validEdit(PieceType type, uint16_t removed);
 // Height of a ramp/cone surface at (x,z); returns false if (x,z) is outside or on a removed tile.
 bool pieceSurfaceHeight(const Piece& p, float x, float z, float& yOut);
 // Which tile of an editable piece a ray hits (ignores edits). Returns -1 if none.

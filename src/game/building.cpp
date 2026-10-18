@@ -202,6 +202,46 @@ void applyStairEdit(Piece& p, uint16_t selected, int firstTile, int lastTile) {
     }
 }
 
+bool validWallEdit(uint16_t removed) {
+    removed &= 0x1FF;
+    if (removed == 0) return true;
+    if (removed == 0x1FF) return false;
+
+    // The cut must be a single rectangle: its tile count equals the area of its bounding box.
+    int minR = 3, maxR = -1, minC = 3, maxC = -1, count = 0;
+    for (int t = 0; t < 9; ++t) {
+        if (!((removed >> t) & 1u)) continue;
+        int r = t / 3, c = t % 3;
+        minR = std::min(minR, r); maxR = std::max(maxR, r);
+        minC = std::min(minC, c); maxC = std::max(maxC, c);
+        ++count;
+    }
+    if (count != (maxR - minR + 1) * (maxC - minC + 1)) return false;
+
+    // Every kept tile must reach a kept bottom-row tile through kept neighbours (flood fill up
+    // from the bottom row). Otherwise part of the wall would hang in the air.
+    uint16_t kept = (uint16_t)(~removed & 0x1FF);
+    uint16_t reached = kept & 0x7;  // bottom row
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (int t = 0; t < 9; ++t) {
+            if (!((kept >> t) & 1u) || ((reached >> t) & 1u)) continue;
+            int r = t / 3, c = t % 3;
+            bool touches = (r > 0 && ((reached >> (t - 3)) & 1u)) || (r < 2 && ((reached >> (t + 3)) & 1u)) ||
+                           (c > 0 && ((reached >> (t - 1)) & 1u)) || (c < 2 && ((reached >> (t + 1)) & 1u));
+            if (touches) {
+                reached |= (uint16_t)(1u << t);
+                grew = true;
+            }
+        }
+    }
+    return reached == kept;
+}
+
+bool validEdit(PieceType type, uint16_t removed) {
+    return type != PieceType::Wall || validWallEdit(removed);
+}
+
 void pieceTris(const Piece& p, std::vector<Tri>& out) {
     if (!p.alive) return;
     const Slot& s = p.slot;

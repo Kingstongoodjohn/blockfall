@@ -86,6 +86,8 @@ void Game::confirmEdit() {
         // Cones flatten instead of disappearing, so every quadrant may be edited.
         if ((player.edit.selected & full) == full && p->slot.type != PieceType::Cone && p->slot.type != PieceType::Ramp) {
             showToast("CAN'T REMOVE EVERY TILE", Vec4(1, 0.6f, 0.4f, 1));
+        } else if (!validEdit(p->slot.type, player.edit.selected & full)) {
+            showToast("NOT A DOOR, WINDOW OR ARCH SHAPE", Vec4(1, 0.6f, 0.4f, 1));
         } else if (p->slot.type == PieceType::Ramp) {
             applyStairEdit(*p, player.edit.selected & full, player.edit.firstTile, player.edit.lastTile);
             p->hp = std::min(p->hp, p->targetHp * BUILD_UP_START);

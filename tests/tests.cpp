@@ -428,6 +428,43 @@ static void testStage4() {
     g.update(gk, DT);
     CHECK(w->removed == 0, "can't cut out all 9 tiles");
 
+    // Door / window shape rules. Tiles: row*3+col, row 0 at the bottom.
+    //   6 7 8
+    //   3 4 5
+    //   0 1 2
+    auto mask = [](std::initializer_list<int> tiles) {
+        uint16_t m = 0;
+        for (int t : tiles) m |= (uint16_t)(1u << t);
+        return m;
+    };
+    CHECK(validWallEdit(0), "uncut wall is valid");
+    CHECK(validWallEdit(mask({1, 4})), "door (bottom middle, two tall)");
+    CHECK(validWallEdit(mask({0, 3})), "side door");
+    CHECK(validWallEdit(mask({4})), "window (middle)");
+    CHECK(validWallEdit(mask({0, 1, 3, 4})), "double door");
+    CHECK(validWallEdit(mask({0, 1, 2})) == false, "whole bottom row: the rest would float");
+    CHECK(validWallEdit(mask({3, 4, 5})) == false, "whole middle row: the top row would float");
+    CHECK(validWallEdit(mask({6, 7, 8})), "half wall (top row cut)");
+    CHECK(validWallEdit(mask({1, 4, 7})), "full-height opening");
+    CHECK(validWallEdit(mask({0, 2})) == false, "two separate holes");
+    CHECK(validWallEdit(mask({1, 4, 5})) == false, "L shape isn't a rectangle");
+    CHECK(validWallEdit(mask({0, 4})) == false, "diagonal tiles aren't one opening");
+    CHECK(validWallEdit(0x1FF) == false, "all nine tiles");
+    CHECK(validEdit(PieceType::Floor, mask({0, 3})), "floors have no shape rules (diagonal ok)");
+
+    // An invalid shape is refused in game and the wall stays as it was.
+    aimAt(g, pieceTileBounds(*w, 4).center());
+    g.update(gk, DT);
+    g.player.edit.selected = mask({3, 4, 5});
+    g.update(gk, DT);
+    CHECK(w->removed == 0 && g.player.mode == Mode::Combat, "invalid wall edit isn't applied (0x%x)", w->removed);
+    aimAt(g, pieceTileBounds(*w, 4).center());
+    g.update(gk, DT);
+    g.player.edit.selected = mask({4});
+    g.update(gk, DT);
+    CHECK(w->removed == mask({4}), "window edit applied (0x%x)", w->removed);
+    w->removed = 0;
+
     // Floor is a 2x2 grid; cone too; ramps can't be edited.
     CHECK(editGridSize(PieceType::Wall) == 3 && editGridSize(PieceType::Floor) == 2 &&
               editGridSize(PieceType::Cone) == 2 && editGridSize(PieceType::Ramp) == 2,

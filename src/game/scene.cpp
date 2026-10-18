@@ -619,6 +619,8 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
         if (p && p->alive) {
             int n = editGridSize(p->slot.type);
             int hover = pieceTileUnderRay(*p, g.camera.aimRay, 60.0f);
+            // A selection that breaks the wall shape rules shows red (it won't be applied).
+            bool shapeOk = validEdit(p->slot.type, g.player.edit.selected);
             for (int t = 0; t < n * n; ++t) {
                 AABB b = pieceTileBounds(*p, t);
                 b.min -= Vec3(0.03f, 0.03f, 0.03f);
@@ -627,7 +629,8 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
                 b.min += shrink;
                 b.max -= shrink;
                 bool sel = (g.player.edit.selected >> t) & 1u;
-                Vec4 c = sel ? Vec4(0.25f, 0.55f, 1.0f, 0.6f) : Vec4(1, 1, 1, 0.22f);
+                Vec4 selColor = shapeOk ? Vec4(0.25f, 0.55f, 1.0f, 0.6f) : Vec4(1.0f, 0.3f, 0.3f, 0.6f);
+                Vec4 c = sel ? selColor : Vec4(1, 1, 1, 0.22f);
                 if (t == hover) c.w += 0.18f;
                 addBox(s.transparent[MESH_CUBE], b, c, 0.7f);
             }
