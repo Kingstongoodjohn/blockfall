@@ -4,6 +4,7 @@
 #include "../core/rng.h"
 #include "building.h"
 #include "input.h"
+#include "nav.h"
 #include "types.h"
 #include "weapons.h"
 #include "world.h"
@@ -177,6 +178,13 @@ struct Bot {
     float stuckTime = 0;
     float detourTime = 0;
     float detourAngle = 0;
+    // Pathfinding: when a bot gets stuck it plans a route around the obstacle (see nav.h).
+    std::vector<Vec3> path;  // corners to walk through; empty = walk straight at the target
+    size_t pathNext = 0;
+    Vec3 pathGoal;           // the target the path was planned for
+    float pathAge = 0;
+    int pathFails = 0;       // got stuck again while following a path
+    int paths = 0;           // paths planned (stats / tests)
     float coverTime = 0;     // time spent hiding at the cover spot
     float walkPhase = 0;
     float hurtTimer = 0;
@@ -344,6 +352,7 @@ public:
     DropPhase dropPhase = DropPhase::Landed;
     float busJumpCooldown = 0;
     int lastAliveBuilds = 0;
+    int pathPlansLeft = NAV_PLANS_PER_FRAME;   // bot path searches still allowed this frame
     bool buildsDirty = false;   // an edit changed a shape: re-check support
     int lastAliveProps = -1;
     std::string poiBanner;     // name shown at the top when you enter a place

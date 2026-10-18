@@ -19,6 +19,7 @@ set(GAME_SOURCES
     src/game/keybinds.cpp
     src/game/loot.cpp
     src/game/map.cpp
+    src/game/nav.cpp
     src/game/player.cpp
     src/game/scene.cpp
     src/game/settings.cpp

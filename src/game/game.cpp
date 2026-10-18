@@ -217,6 +217,7 @@ Vec3 Game::actorPos(int id) const {
 void Game::update(const InputState& in, float dt) {
     dt = clampf(dt, 0.0f, 0.05f);
     time += dt;
+    pathPlansLeft = NAV_PLANS_PER_FRAME;
     if (in.helpPressed) showHelp = !showHelp;
     if (in.restartPressed && matchOver()) {
         MatchConfig next = config;

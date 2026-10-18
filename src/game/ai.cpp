@@ -250,17 +250,35 @@ void Game::pickNewWander(Bot& b) {
 
 void Game::steerBot(Bot& b, const Vec3& target, float speed, float dt) {
     Body& body = b.body;
-    Vec3 to(target.x - body.pos.x, 0, target.z - body.pos.z);
+    // Following a path around something? Head for its next corner instead of the target.
+    Vec3 aim = target;
+    if (!b.path.empty()) {
+        b.pathAge += dt;
+        if (speed <= 0 || lengthXZ(target - b.pathGoal) > 3.0f || b.pathAge > 8.0f) {
+            b.path.clear();   // stopped, the target moved, or it's taking too long: plan again if stuck
+        } else {
+            while (b.pathNext < b.path.size() && lengthXZ(b.path[b.pathNext] - body.pos) < 0.6f) ++b.pathNext;
+            if (b.pathNext >= b.path.size()) {
+                b.path.clear();
+                b.pathFails = 0;
+            } else {
+                aim = b.path[b.pathNext];
+            }
+        }
+    }
+    Vec3 to(aim.x - body.pos.x, 0, aim.z - body.pos.z);
     float dist = length(to);
     Vec3 desired(0, 0, 0);
     if (dist > 0.4f && speed > 0) {
         Vec3 dir = to / dist;
-        if (b.detourTime > 0) {
+        if (b.detourTime > 0 && b.path.empty()) {
             b.detourTime -= dt;
             float c = std::cos(b.detourAngle), s = std::sin(b.detourAngle);
             dir = Vec3(dir.x * c + dir.z * s, 0, -dir.x * s + dir.z * c);
         }
-        desired = dir * std::min(speed, dist * 3.0f);
+        // Only slow down near the real target, not at each corner of the path.
+        float slowDist = b.path.empty() ? dist : lengthXZ(target - body.pos);
+        desired = dir * std::min(speed, slowDist * 3.0f);
     }
     Vec3 hv(body.vel.x, 0, body.vel.z);
     Vec3 diff = desired - hv;
@@ -277,14 +295,33 @@ void Game::steerBot(Bot& b, const Vec3& target, float speed, float dt) {
     float moved = lengthXZ(body.pos - before);
     b.walkPhase += moved * 2.4f;
 
-    // Stuck on something? Try going around it and hop.
+    // Stuck on something? Plan a path around it. If that fails (no route, not on the ground, too
+    // many bots planning this frame, or stuck again on the path), swerve to one side and hop.
     if (length(desired) > 1.0f && moved < length(desired) * dt * 0.3f) {
         b.stuckTime += dt;
         if (b.stuckTime > 0.5f) {
-            b.detourAngle = (rng.chance(0.5f) ? 1.0f : -1.0f) * deg2rad(rng.range(55, 85));
-            b.detourTime = 1.0f;
             b.stuckTime = 0;
-            if (body.grounded) body.vel.y = JUMP_SPEED;
+            if (!b.path.empty()) ++b.pathFails;
+            bool onGround = body.grounded && body.pos.y < world.terrainHeight(body.pos.x, body.pos.z) + 1.0f;
+            bool planned = false;
+            if (onGround && pathPlansLeft > 0 && b.pathFails < 2) {
+                --pathPlansLeft;
+                planned = findPath(world, body.pos, target, b.path);
+                if (planned) {
+                    b.pathNext = 0;
+                    b.pathGoal = target;
+                    b.pathAge = 0;
+                    b.detourTime = 0;
+                    ++b.paths;
+                }
+            }
+            if (!planned) {
+                b.path.clear();
+                b.pathFails = 0;
+                b.detourAngle = (rng.chance(0.5f) ? 1.0f : -1.0f) * deg2rad(rng.range(55, 85));
+                b.detourTime = 1.0f;
+                if (body.grounded) body.vel.y = JUMP_SPEED;
+            }
         }
     } else {
         b.stuckTime = 0;

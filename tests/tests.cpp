@@ -2304,6 +2304,102 @@ static void testCharacterModel() {
 }
 
 // ------------------------------------------------------------------ performance
+static void testPathfinding() {
+    section("Bot pathfinding");
+    Game g = quietGame();
+    Vec3 mid = g.world.playerSpawn;
+    clearArea(g, mid, 50);
+    int ci = (int)std::floor(mid.x / TILE), cj = (int)std::floor(mid.z / TILE);
+    auto wall = [&](int i, int j, int side) {
+        Slot s;
+        s.type = PieceType::Wall;
+        s.i = i; s.j = j; s.k = 0; s.side = side;
+        return g.world.build.place(s, true);
+    };
+    auto insideSolid = [&](const Vec3& p) {
+        std::vector<AABB> solids;
+        AABB probe{{p.x - 0.3f, p.y + 0.8f, p.z - 0.3f}, {p.x + 0.3f, p.y + 1.6f, p.z + 0.3f}};
+        g.world.collectSolids(probe, solids);
+        return !solids.empty();
+    };
+    Vec3 cellC((ci + 0.5f) * TILE, 0, (cj + 0.5f) * TILE);
+    cellC.y = g.world.terrainHeight(cellC.x, cellC.z);
+
+    // A U of walls open to the south; the goal is straight north, behind the closed side.
+    wall(ci, cj + 1, 1);       // north
+    wall(ci, cj, 0);           // west
+    wall(ci + 1, cj, 0);       // east
+    Vec3 goal = cellC + Vec3(0, 0, 15);
+    std::vector<Vec3> path;
+    bool ok = findPath(g.world, cellC, goal, path);
+    CHECK(ok && !path.empty() && lengthXZ(path.back() - goal) < 0.01f, "path out of a U-shaped trap (%zu corners)", path.size());
+    bool clear = true, wentSouth = false;
+    for (const Vec3& p : path) {
+        if (insideSolid(p)) clear = false;
+        if (p.z < cj * TILE + 0.5f) wentSouth = true;
+    }
+    CHECK(clear, "no corner of the path is inside a wall");
+    CHECK(wentSouth, "the path leaves through the open side first");
+
+    // A bot in the trap gets out and reaches the goal (straight steering would push into the wall).
+    Bot& b = g.bots[0];
+    b.alive = true;
+    b.team = 1;
+    b.style = BotStyle::Mixed;
+    b.body = Body();
+    b.body.pos = cellC;
+    b.drop = DropPhase::Landed;
+    b.state = AIState::Wander;
+    b.stateTime = 0;
+    b.moveTarget = goal;
+    b.targetId = NO_TARGET;
+    b.lootTimer = 100;
+    g.player.body.pos = mid + Vec3(150, 0, 150);   // out of sight, so the bot doesn't start a fight
+    g.player.body.pos.y = g.world.terrainHeight(g.player.body.pos.x, g.player.body.pos.z);
+    float closest = 1e9f;
+    for (int f = 0; f < 60 * 20 && closest > 1.5f; ++f) {   // ~26 m around the walls at wander speed
+        g.pathPlansLeft = NAV_PLANS_PER_FRAME;
+        b.moveTarget = goal;
+        b.lootTimer = 100;
+        g.updateBot(b, DT);
+        closest = std::min(closest, lengthXZ(b.body.pos - goal));
+    }
+    CHECK(closest <= 1.5f && b.paths >= 1, "bot walks out of the trap to the goal (%.1f m away, %d paths)", closest, b.paths);
+
+    // A closed box with a door cut in its south wall: the path goes in through the door.
+    int bi = ci + 4, bj = cj;
+    wall(bi, bj, 1);           // south (gets the door)
+    wall(bi, bj + 1, 1);       // north
+    wall(bi, bj, 0);           // west
+    int eastId = wall(bi + 1, bj, 0);
+    Piece* south = nullptr;
+    for (Piece& p : g.world.build.pieces())
+        if (p.alive && p.slot.type == PieceType::Wall && p.slot.side == 1 && p.slot.i == bi && p.slot.j == bj) south = &p;
+    CHECK(south != nullptr, "door wall placed");
+    if (south) south->removed = (1u << 1) | (1u << 4);   // door: bottom middle, two tiles tall
+    Vec3 inside((bi + 0.5f) * TILE, 0, (bj + 0.5f) * TILE);
+    inside.y = g.world.terrainHeight(inside.x, inside.z);
+    Vec3 outside = inside + Vec3(0, 0, 14);   // north of the box
+    ok = findPath(g.world, outside, inside, path);
+    bool viaDoor = false;
+    for (const Vec3& p : path)
+        if (p.z < bj * TILE + 1.5f && std::fabs(p.x - inside.x) < 1.2f) viaDoor = true;
+    CHECK(ok && lengthXZ(path.back() - inside) < 0.01f && viaDoor, "path into a closed box goes through its door (%zu corners)", path.size());
+
+    // Without the door there's no way in: the path stops outside, next to the box.
+    if (south) south->removed = 0;
+    ok = findPath(g.world, outside, inside, path);
+    CHECK(!ok || lengthXZ(path.back() - inside) > 2.5f, "no route into a sealed box");
+    (void)eastId;
+
+    // Cost: one search across 40 m with obstacles stays cheap.
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (int k = 0; k < 20; ++k) findPath(g.world, cellC, goal, path);
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0).count() / 20.0;
+    std::printf("  %.3f ms per path search\n", ms);
+    CHECK(ms < 2.0, "path search is fast (%.3f ms)", ms);
+}
+
 static void testPerformance() {
     section("Performance (CPU side of one frame)");
     Game g;
@@ -2360,6 +2456,7 @@ int main() {
     testAccounts();
     testBigMap();
     testFallShockBots();
+    testPathfinding();
     testPerformance();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
