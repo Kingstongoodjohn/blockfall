@@ -5,6 +5,7 @@
 #include "building.h"
 #include "input.h"
 #include "nav.h"
+#include "sfx.h"
 #include "types.h"
 #include "weapons.h"
 #include "world.h"
@@ -111,6 +112,7 @@ struct Player {
     float medkitTimer = -1;   // >= 0 while using a Med Kit
     float interactTimer = 0;  // chest hold progress
     float walkPhase = 0;
+    int lastStep = 0;         // footstep sound: walkPhase / PI when the last one played
     bool alive = true;
     // Knocked (duos/trios/squads): down on the ground, bleeding out, until a teammate revives you.
     bool down = false;
@@ -187,6 +189,7 @@ struct Bot {
     int paths = 0;           // paths planned (stats / tests)
     float coverTime = 0;     // time spent hiding at the cover spot
     float walkPhase = 0;
+    int lastStep = 0;
     float hurtTimer = 0;
     int kills = 0;
     float shotAnim = 0;
@@ -333,6 +336,12 @@ public:
     float checkLanding(Body& b, int actorId, float dt);
     void explodeShockwave(const Vec3& at);
     std::vector<Message> killFeed;
+    // Sounds made since the platform layer last played them (it empties the list every frame).
+    std::vector<SoundEvent> sounds;
+    void sound(Sfx id, const Vec3& pos, float volume = 1.0f);   // a sound out in the world
+    void soundUi(Sfx id, float volume = 1.0f);                  // a sound "in your head" (hit markers, menus)
+    // Footstep sound each time the walk cycle puts a foot down.
+    void footstep(float walkPhase, int& lastStep, const Body& body, float volume);
     Message toast;
     Camera camera;
     InteractPrompt prompt;

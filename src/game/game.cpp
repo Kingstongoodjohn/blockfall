@@ -503,6 +503,7 @@ float Game::checkLanding(Body& b, int actorId, float dt) {
     if (!b.airborne) return 0;
     b.airborne = false;
     float drop = b.fallPeak - b.pos.y;
+    if (drop > 0.9f) sound(Sfx::Land, b.pos, clampf(drop / 6.0f, 0.4f, 1.0f));
     if (b.fallImmune > 0 || drop <= FALL_SAFE_DROP) return 0;
     float dmg = std::min(FALL_MAX_DAMAGE, (drop - FALL_SAFE_DROP) * FALL_DAMAGE_PER_M);
     damageActor(actorId, dmg, false, b.pos + Vec3(0, 1, 0), NO_TARGET, "FALL");
@@ -522,6 +523,7 @@ void Game::throwShockwave() {
 // Everyone near the blast (you too) gets launched away and up. No damage, like the real thing.
 void Game::explodeShockwave(const Vec3& at) {
     shockRings.push_back({at, 0});
+    sound(Sfx::Shockwave, at);
     auto push = [&](Body& body) {
         Vec3 c = body.pos + Vec3(0, 0.9f, 0);
         float d = length(c - at);
@@ -554,7 +556,10 @@ void Game::settleBuilds() {
     if (n > 0) {
         for (int id : broken) {
             const Piece* p = world.build.get(id);
-            if (p) damageNumbers.push_back({pieceBounds(p->slot).center(), 0, Vec4(1, 0.6f, 0.4f, 1), 0, false});
+            if (p) {
+                damageNumbers.push_back({pieceBounds(p->slot).center(), 0, Vec4(1, 0.6f, 0.4f, 1), 0, false});
+                sound(Sfx::BuildBreak, pieceBounds(p->slot).center());
+            }
         }
         showToast(n == 1 ? "A FLOATING BUILD BROKE" : std::to_string(n) + " FLOATING BUILDS BROKE", Vec4(1, 0.6f, 0.4f, 1));
     }
@@ -592,6 +597,7 @@ void Game::updateStorm(float dt) {
         st.shrinking = true;
         st.timer = st.stageLength = shrinkTimes[std::min(st.stage, 5)];
         addKillMessage("THE STORM IS SHRINKING", Vec4(0.8f, 0.5f, 1, 1));
+        soundUi(Sfx::StormShrink);
     } else if (st.shrinking) {
         // Move smoothly toward the next circle.
         st.center = lerp(st.center, st.nextCenter, clampf(dt / std::max(st.timer, dt), 0, 1));
@@ -712,11 +718,16 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
     if (actorDown(victim)) {
         float& dh = victim == PLAYER_ACTOR_ID ? player.downHealth : bots[victim].downHealth;
         dh -= amount;
-        if (victim == PLAYER_ACTOR_ID) player.hurtTimer = 0.35f;
-        else bots[victim].hurtTimer = 1.5f;
+        if (victim == PLAYER_ACTOR_ID) {
+            player.hurtTimer = 0.35f;
+            soundUi(Sfx::Hurt, 0.7f);
+        } else {
+            bots[victim].hurtTimer = 1.5f;
+        }
         if (byPlayer) {
             damageNumbers.push_back({at, (int)std::lround(amount), Vec4(1, 1, 1, 1), 0, false});
             hitMarker = 0.18f;
+            soundUi(Sfx::HitBody);
         }
         if (dh <= 0) { dh = 0; eliminate(victim, attacker, weapon); }
         return amount;
@@ -728,6 +739,8 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
         player.health -= (amount - toShield);
         bool stormTick = attacker == NO_TARGET;
         player.hurtTimer = stormTick ? std::max(player.hurtTimer, 0.15f) : 0.35f;
+        if (weapon && std::string(weapon) == "STORM") soundUi(Sfx::StormTick);
+        else soundUi(Sfx::Hurt);
         // Getting shot cancels healing; storm ticks don't (you can heal inside the storm).
         if (player.medkitTimer >= 0 && !stormTick) player.medkitTimer = -1;
         if (player.health <= 0) {
@@ -761,6 +774,7 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
         damageNumbers.push_back({at, (int)std::lround(amount), head ? Vec4(1, 0.85f, 0.2f, 1) : Vec4(1, 1, 1, 1), 0, false});
         hitMarker = 0.18f;
         hitMarkerHead = head;
+        soundUi(head ? Sfx::HitHead : Sfx::HitBody);
         // Add to the running total on this target (it resets after 1 s without a hit).
         DamageStack* st = nullptr;
         for (DamageStack& d : damageStacks)
@@ -786,6 +800,7 @@ float Game::damageActor(int victim, float amount, bool head, const Vec3& at, int
 // ------------------------------------------------------------------ knocked / eliminated
 void Game::knock(int victim, int attacker, const char* weapon) {
     std::string weaponTag = (weapon && *weapon) ? std::string(" (") + weapon + ")" : "";
+    sound(Sfx::Knock, actorPos(victim));
     if (victim == PLAYER_ACTOR_ID) {
         if (player.mode == Mode::Edit) cancelEdit();
         player.down = true;
@@ -830,6 +845,7 @@ void Game::eliminate(int victim, int attacker, const char* weapon) {
         player.down = false;
         player.mode = Mode::Combat;
         if (attacker >= 0 && attacker < (int)bots.size()) bots[attacker].kills++;
+        soundUi(Sfx::Knock);
         addKillMessage(attacker == NO_TARGET ? (std::string(weapon) == "FALL" ? "YOU FELL TO YOUR DEATH" : "YOU WERE ELIMINATED")
                                              : actorName(attacker) + " ELIMINATED YOU" + weaponTag,
                        Vec4(1, 0.35f, 0.3f, 1));
@@ -850,6 +866,7 @@ void Game::eliminate(int victim, int attacker, const char* weapon) {
         else if (actorTeam(attacker) == 0) col = Vec4(0.55f, 0.85f, 1, 1);    // our team got the kill
         if (byPlayer) {
             player.kills++;
+            soundUi(Sfx::Elimination);
             addKillMessage("YOU ELIMINATED " + b.name + weaponTag, Vec4(1, 1, 1, 1));
         } else {
             if (attacker >= 0 && attacker < (int)bots.size()) bots[attacker].kills++;
@@ -865,6 +882,7 @@ void Game::eliminate(int victim, int attacker, const char* weapon) {
 }
 
 void Game::revive(int id) {
+    sound(Sfx::Revive, actorPos(id));
     if (id == PLAYER_ACTOR_ID) {
         player.down = false;
         player.health = REVIVE_HEALTH;
@@ -905,6 +923,21 @@ void Game::updateKnocked(float dt) {
     if (player.alive && player.down) tick(player.downHealth, player.reviveProgress, player.revivedThisFrame, PLAYER_ACTOR_ID, player.lastAttacker);
     for (Bot& b : bots)
         if (b.alive && b.down) tick(b.downHealth, b.reviveProgress, b.revivedThisFrame, b.index, b.lastAttacker);
+}
+
+void Game::sound(Sfx id, const Vec3& pos, float volume) {
+    if (sounds.size() < (size_t)MAX_SOUND_EVENTS) sounds.push_back({id, pos, volume, false});
+}
+
+void Game::soundUi(Sfx id, float volume) {
+    if (sounds.size() < (size_t)MAX_SOUND_EVENTS) sounds.push_back({id, Vec3(), volume, true});
+}
+
+void Game::footstep(float walkPhase, int& lastStep, const Body& body, float volume) {
+    int step = (int)std::floor(walkPhase / PI);
+    if (step == lastStep) return;
+    lastStep = step;
+    if (body.grounded) sound(Sfx::Footstep, body.pos, volume);
 }
 
 void Game::showToast(const std::string& s, const Vec4& c) {
@@ -1008,6 +1041,7 @@ void Game::pickup(int index) {
     if (giveItem(it, true)) {
         std::string label = it.label();
         if (it.kind == ItemKind::Ammo || it.kind == ItemKind::Mats) label = std::to_string(it.count) + " " + label;
+        soundUi(Sfx::Pickup);
         showToast("PICKED UP " + label, it.kind == ItemKind::Gun ? rarityColor(it.rarity) : Vec4(1, 1, 1, 1));
     } else {
         world.pickups[index].alive = true;
@@ -1019,6 +1053,7 @@ void Game::openChest(int index) {
     Chest& c = world.chests[index];
     if (c.opened) return;
     c.opened = true;
+    sound(Sfx::ChestOpen, c.pos);
     Vec3 base = c.pos + Vec3(0, 1.0f, 0);
     Vec3 toward = normalize(Vec3(player.body.pos.x - c.pos.x, 0, player.body.pos.z - c.pos.z));
     if (length(toward) < 0.5f) toward = Vec3(std::sin(c.yaw), 0, std::cos(c.yaw));

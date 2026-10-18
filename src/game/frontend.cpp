@@ -227,7 +227,9 @@ bool FrontEnd::button(const std::string& label, float x, float y, float w, float
     float scale = std::min(2.2f * ui_, (h * 0.5f) / CHAR_HEIGHT);
     Vec4 tc = primary ? Vec4(0.1f, 0.08f, 0.04f, 1) : (enabled ? WHITE : Vec4(0.6f, 0.6f, 0.65f, 1));
     hud_->text(x + w * 0.5f, y + (h - CHAR_HEIGHT * scale) * 0.5f, scale, tc, label, 1);
-    return hover && in_->pressed[KEY_MOUSE_LEFT];
+    bool clicked = hover && in_->pressed[KEY_MOUSE_LEFT];
+    if (clicked) game.soundUi(Sfx::UiClick);
+    return clicked;
 }
 
 bool FrontEnd::textField(int id, std::string& value, const std::string& placeholder, float x, float y, float w, float h, bool secret) {
@@ -736,7 +738,21 @@ void FrontEnd::graphicsTab(float px, float py, float pw, float ph) {
         settings.vsync = !settings.vsync;
         save();
     }
-    hud_->text(x + 230 * u, y + 14 * u, 1.3f * u, DIM, "THESE ARE THIS GAME'S OWN VERSIONS OF THE UE5 EFFECTS, BUILT ON DIRECT3D 11.");
+    // Sound volume, on the same row.
+    char vol[32];
+    std::snprintf(vol, sizeof vol, "SOUND VOLUME  %d%%", (int)std::lround(settings.volume * 100.0f));
+    float vx = x + 240 * u;
+    hud_->text(vx, y + 12 * u, 1.8f * u, WHITE, vol);
+    float vbx = vx + hud_->textWidth(vol, 1.8f * u) + 20 * u;
+    if (button("-", vbx, y, 48 * u, 44 * u)) {
+        settings.volume = std::max(0.0f, std::round(settings.volume * 10.0f - 1.0f) / 10.0f);
+        save();
+    }
+    if (button("+", vbx + 56 * u, y, 48 * u, 44 * u)) {
+        settings.volume = std::min(1.0f, std::round(settings.volume * 10.0f + 1.0f) / 10.0f);
+        save();
+    }
+    hud_->text(x, y + 60 * u, 1.3f * u, DIM, "THESE ARE THIS GAME'S OWN VERSIONS OF THE UE5 EFFECTS, BUILT ON DIRECT3D 11.");
 }
 
 void FrontEnd::pauseScreen() {

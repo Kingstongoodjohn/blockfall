@@ -46,6 +46,7 @@ bool Game::tryPlaceBuild() {
     if (world.build.place(buildTarget.slot, true, player.buildMat) < 0) return false;
     player.curMats() -= BUILD_COST;
     player.buildAnim = 0.2f;
+    sound(Sfx::BuildPlace, pieceBounds(buildTarget.slot).center());
     buildTarget.valid = false;
     buildTarget.occupied = true;
     return true;
@@ -92,9 +93,11 @@ void Game::confirmEdit() {
             applyStairEdit(*p, player.edit.selected & full, player.edit.firstTile, player.edit.lastTile);
             p->hp = std::min(p->hp, p->targetHp * BUILD_UP_START);
             buildsDirty = true;
+            sound(Sfx::Edit, pieceBounds(p->slot).center());
         } else if ((player.edit.selected & full) != p->removed) {
             p->removed = player.edit.selected & full;
             buildsDirty = true;
+            sound(Sfx::Edit, pieceBounds(p->slot).center());
             // An edited piece is rebuilt: it builds back up to the health it had (damage isn't healed).
             p->hp = std::min(p->hp, p->targetHp * BUILD_UP_START);
         }

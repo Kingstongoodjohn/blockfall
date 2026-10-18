@@ -2400,6 +2400,84 @@ static void testPathfinding() {
     CHECK(ms < 2.0, "path search is fast (%.3f ms)", ms);
 }
 
+static void testSound() {
+    section("Sound effects");
+    // Every sound synthesises to a short, non-silent, repeatable clip with no click at the end.
+    bool allOk = true;
+    for (int i = 0; i < (int)Sfx::Count; ++i) {
+        std::vector<int16_t> a = synthSfx((Sfx)i), b = synthSfx((Sfx)i);
+        int peak = 0;
+        for (int16_t s : a) peak = std::max(peak, std::abs((int)s));
+        float secs = (float)a.size() / SFX_SAMPLE_RATE;
+        bool ok = !a.empty() && secs <= 2.0f && peak > 3000 && a == b && std::abs((int)a.back()) < 200;
+        if (!ok) {
+            allOk = false;
+            std::printf("  bad sound %s: %.2f s, peak %d, repeatable %d\n", sfxName((Sfx)i), secs, peak, (int)(a == b));
+        }
+    }
+    CHECK(allOk, "all %d sounds synthesise cleanly", (int)Sfx::Count);
+    CHECK(std::string(sfxName(Sfx::UiClick)) == "UI_CLICK" && shotSfx(GunType::Sniper) == Sfx::ShotSniper, "names and gun sounds");
+
+    // Distance and direction.
+    float gNear, pNear, gFar, pFar, gOut, pOut, gLeft, pLeft;
+    Vec3 ear(0, 0, 0), right(1, 0, 0);
+    sfxMix(ear, right, Vec3(3, 0, 0), 150, gNear, pNear);
+    sfxMix(ear, right, Vec3(80, 0, 0), 150, gFar, pFar);
+    sfxMix(ear, right, Vec3(200, 0, 0), 150, gOut, pOut);
+    sfxMix(ear, right, Vec3(-5, 0, 0), 150, gLeft, pLeft);
+    CHECK(gNear > 0.6f && gFar > 0 && gFar < gNear * 0.3f && gOut == 0, "quieter with distance (%.2f, %.3f, %.2f)", gNear, gFar, gOut);
+    CHECK(pNear > 0.5f && pLeft < -0.5f, "panned to the side it comes from (%.2f, %.2f)", pNear, pLeft);
+
+    // The game makes the right sounds.
+    auto has = [](const Game& g, Sfx id) {
+        for (const SoundEvent& e : g.sounds)
+            if (e.id == id) return true;
+        return false;
+    };
+    Game g = quietGame();
+    standAtCell(g, 0, 0);
+    clearArea(g, g.player.body.pos, 40);
+    g.sounds.clear();
+    g.player.slots[0] = Item::makeGun(GunType::Shotgun, Rarity::Rare);
+    g.player.selected = 0;
+    g.player.pickaxeOut = false;
+    InputState fire;
+    fire.fire = fire.firePressed = true;
+    g.update(fire, DT);
+    CHECK(has(g, Sfx::ShotShotgun), "shooting a shotgun makes a shotgun sound");
+    g.sounds.clear();
+    Vec3 walkStart = g.player.body.pos;
+    run(g, 120, [](int) { InputState in; in.forward = true; return in; });
+    float walked = lengthXZ(g.player.body.pos - walkStart);
+    int steps = 0;
+    for (const SoundEvent& e : g.sounds) steps += e.id == Sfx::Footstep;
+    // The walk animation puts a foot down every PI / 2.4 = ~1.3 m.
+    int expected = (int)(walked * 2.4f / PI);
+    CHECK(steps >= 4 && std::abs(steps - expected) <= 1, "footsteps match the walk cycle (%d over %.1f m)", steps, walked);
+    g.sounds.clear();
+    g.player.mode = Mode::Build;
+    g.player.buildPiece = PieceType::Wall;
+    run(g, 2, none);
+    g.update(fire, DT);
+    CHECK(has(g, Sfx::BuildPlace), "placing a build makes a sound");
+    g.player.mode = Mode::Combat;
+    // A gunshot is heard from far away, a footstep isn't.
+    CHECK(sfxRange(Sfx::ShotAR) > 100 && sfxRange(Sfx::Footstep) < 30, "gunshots carry further than footsteps");
+    // Nobody drains the list in tests: it stops growing at the cap.
+    g.sounds.clear();
+    for (int i = 0; i < MAX_SOUND_EVENTS + 50; ++i) g.soundUi(Sfx::UiClick);
+    CHECK((int)g.sounds.size() == MAX_SOUND_EVENTS, "sound list is capped (%zu)", g.sounds.size());
+
+    // Volume is saved with the settings.
+    Settings s;
+    s.volume = 0.3f;
+    Settings l;
+    l.parse(s.serialize());
+    CHECK(std::fabs(l.volume - 0.3f) < 1e-4f, "volume saved and loaded (%.2f)", l.volume);
+    l.parse("volume=7\n");
+    CHECK(std::fabs(l.volume - 0.3f) < 1e-4f, "bad volume ignored");
+}
+
 static void testPerformance() {
     section("Performance (CPU side of one frame)");
     Game g;
@@ -2457,6 +2535,7 @@ int main() {
     testBigMap();
     testFallShockBots();
     testPathfinding();
+    testSound();
     testPerformance();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

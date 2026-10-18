@@ -20,6 +20,7 @@ set(GAME_SOURCES
     src/game/loot.cpp
     src/game/map.cpp
     src/game/nav.cpp
+    src/game/sfx.cpp
     src/game/player.cpp
     src/game/scene.cpp
     src/game/settings.cpp
@@ -51,8 +52,10 @@ if(WIN32)
         src/platform/main_win32.cpp
         src/platform/input_win32.cpp
         src/platform/renderer_d3d11.cpp
+        src/platform/audio_xaudio2.cpp
     )
-    target_link_libraries(Blockfall PRIVATE blockfall_core d3d11 dxgi d3dcompiler gdi32)
+    # XAudio2 itself is loaded at runtime (no import library); ole32 is for CoInitializeEx.
+    target_link_libraries(Blockfall PRIVATE blockfall_core d3d11 dxgi d3dcompiler gdi32 ole32)
     if(MSVC)
         target_compile_options(Blockfall PRIVATE /W4 /permissive-)
         set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Blockfall)

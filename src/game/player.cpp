@@ -179,6 +179,7 @@ void Game::updateMovement(const InputState& in, float dt) {
     checkLanding(b, PLAYER_ACTOR_ID, dt);
     float moved = lengthXZ(b.pos - before);
     player.walkPhase += moved * 2.4f;
+    footstep(player.walkPhase, player.lastStep, b, player.crouched ? 0.35f : (player.sprinting ? 1.0f : 0.7f));
     player.idleTime = moved > 0.001f || !b.grounded ? 0.0f : player.idleTime + dt;
 }
 
@@ -205,6 +206,7 @@ void Game::reloadSelected() {
         return;
     }
     gs.reloadTimer = g.reloadTime;
+    sound(Sfx::Reload, player.body.pos + Vec3(0, 1.2f, 0));
 }
 
 void Game::updateCombat(const InputState& in, float dt) {
@@ -228,6 +230,7 @@ void Game::updateCombat(const InputState& in, float dt) {
                 it.count--;
                 if (it.count == 0 && player.ammo[(int)g.ammo] > 0) reloadSelected();
             } else if (in.firePressed) {
+                sound(Sfx::DryFire, player.body.pos + Vec3(0, 1.2f, 0));
                 reloadSelected();
             }
         }
@@ -263,6 +266,7 @@ void Game::updateCombat(const InputState& in, float dt) {
                     showToast("+25 SHIELD", Vec4(0.4f, 0.7f, 1, 1));
                 }
                 player.medkitTimer = -1;
+                soundUi(Sfx::HealDone);
                 if (--it.count <= 0) it = Item();
             }
         }
@@ -290,6 +294,7 @@ void Game::swingPickaxe() {
     switch (h.kind) {
         case HitKind::Static: {
             HarvestResult r = world.harvest(h.id, PICKAXE_BUILD_DAMAGE);
+            sound(r.destroyed ? Sfx::BuildBreak : Sfx::PickaxeHit, h.point);
             if (r.mats > 0) {
                 int& m = player.matCount[r.matType];
                 int before = m;
@@ -300,10 +305,11 @@ void Game::swingPickaxe() {
             break;
         }
         case HitKind::Piece:
-            world.build.damage(h.id, PICKAXE_BUILD_DAMAGE);
+            sound(world.build.damage(h.id, PICKAXE_BUILD_DAMAGE) ? Sfx::BuildBreak : Sfx::PickaxeHit, h.point);
             damageNumbers.push_back({h.point, (int)PICKAXE_BUILD_DAMAGE, Vec4(0.7f, 0.85f, 1, 1), 0, false});
             break;
         case HitKind::Actor:
+            sound(Sfx::PickaxeHit, h.point);
             if (h.id >= 0) damageActor(h.id, PICKAXE_PLAYER_DAMAGE, false, h.point + Vec3(0, 0.3f, 0), PLAYER_ACTOR_ID, "PICKAXE");
             break;
         default:
@@ -351,9 +357,10 @@ void Game::firePlayerGun() {
         damageActor(kv.first, kv.second.first, kv.second.second, hitPoints[kv.first] + Vec3(0, 0.3f, 0), PLAYER_ACTOR_ID,
                     g.name);
     for (auto& kv : pieceDamage) {
-        world.build.damage(kv.first, kv.second);
+        if (world.build.damage(kv.first, kv.second)) sound(Sfx::BuildBreak, hitPoints[100000 + kv.first]);
         damageNumbers.push_back({hitPoints[100000 + kv.first], (int)std::lround(kv.second), Vec4(0.7f, 0.85f, 1, 1), 0, false});
     }
+    sound(shotSfx(it.gun), muzzle);
     onShotFired(gs, g);
     player.shotAnim = 0.12f;
 }

@@ -7,6 +7,7 @@
 #include "../game/frontend.h"
 #include "../game/model.h"
 #include "../game/map.h"
+#include "audio_xaudio2.h"
 #include "input_win32.h"
 #include "renderer_d3d11.h"
 
@@ -83,6 +84,7 @@ struct Demo {
     int stopAt = 650;   // --until N stops the demo early
     bool done = false;
     int tree = -1;
+    int soundEvents = 0;   // sounds the game asked for during the demo (logged at the end)
     const char* pendingShot = nullptr;
 
     static void hold(RawInput& r, int k) { r.down[k] = true; }
@@ -412,6 +414,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
         SetWindowTextA(app.hwnd, title.c_str());
     }
 
+    Audio audio;
+    {
+        std::string aerr;
+        bool ok = audio.init(aerr);
+        if (demo.log) std::fprintf(demo.log, "audio: %s\n", ok ? "XAudio2 ready" : aerr.c_str());
+    }
+
     FrontEnd fe;
     fe.init(demoMode ? demo.dir + "\\demo_settings.ini" : settingsPath());
     SceneList scene;
@@ -458,6 +467,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
         if (!demoMode) app.input.setLocked(fe.wantsMouseLocked());
         if (fe.quitRequested) app.running = false;
 
+        // Play the sounds the game made this frame, heard from the camera.
+        if (demo.log && !fe.game.sounds.empty()) demo.soundEvents += (int)fe.game.sounds.size();
+        audio.setVolume(fe.settings.volume);
+        audio.play(fe.game.sounds, fe.game.camera.eye, fe.game.camera.right);
+        fe.game.sounds.clear();
+
         if (visible) {
             app.renderer.setGraphics(fe.settings.gfx);
             app.renderer.setTerrain(fe.game.world);
@@ -479,6 +494,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
             if (demo.done) {
                 if (demo.log) {
                     double secs = nowSeconds() - demoStart;
+                    std::fprintf(demo.log, "sound events: %d\n", demo.soundEvents);
                     std::fprintf(demo.log, "demo finished: %d frames in %.2fs\n", demo.frame, secs);
                     std::fclose(demo.log);
                     demo.log = nullptr;
@@ -489,6 +505,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
     }
 
     app.input.setLocked(false);
+    audio.shutdown();
     app.renderer.shutdown();
     DestroyWindow(app.hwnd);
     return 0;

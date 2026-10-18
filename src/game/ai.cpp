@@ -83,6 +83,7 @@ bool Game::botBuild(Bot& b, PieceType type, int facing, int levelOffset) {
             bounds.min.z < me.max.z && bounds.max.z > me.min.z) return false;
     }
     if (world.build.place(s, false, (BuildMat)matIdx) < 0) return false;
+    sound(Sfx::BuildPlace, bounds.center());
     b.mats[matIdx] -= BUILD_COST;
     b.builds++;
     return true;
@@ -175,6 +176,7 @@ void Game::botLoot(Bot& b) {
     for (Chest& c : world.chests) {
         if (c.opened || lengthXZ(c.pos - b.body.pos) > 2.6f || std::fabs(c.pos.y - b.body.pos.y) > 2.5f) continue;
         c.opened = true;
+        sound(Sfx::ChestOpen, c.pos);
         std::vector<Item> items = rollChest(rng);
         for (const Item& it : items) {
             bool want = (it.kind == ItemKind::Gun && botWantsGun(b, it)) || it.kind == ItemKind::MedKit || it.kind == ItemKind::Mini || it.kind == ItemKind::BigPot;
@@ -294,6 +296,7 @@ void Game::steerBot(Bot& b, const Vec3& target, float speed, float dt) {
     checkLanding(body, b.index, dt);
     float moved = lengthXZ(body.pos - before);
     b.walkPhase += moved * 2.4f;
+    footstep(b.walkPhase, b.lastStep, body, speed > 5.0f ? 0.9f : 0.6f);
 
     // Stuck on something? Plan a path around it. If that fails (no route, not on the ground, too
     // many bots planning this frame, or stuck again on the path), swerve to one side and hop.
@@ -499,7 +502,7 @@ void Game::botShoot(Bot& b) {
                 head[h.id] = head[h.id] || h.head;
                 at[h.id] = h.point;
             } else if (h.kind == HitKind::Piece) {
-                world.build.damage(h.id, bulletDamage(b.gun, h.t, false));
+                if (world.build.damage(h.id, bulletDamage(b.gun, h.t, false))) sound(Sfx::BuildBreak, h.point);
             }
         }
         tracers.push_back({muzzle, end, Vec4(1.0f, 0.45f, 0.35f, 0.9f), 0});
@@ -509,6 +512,7 @@ void Game::botShoot(Bot& b) {
         float scale = BOT_DAMAGE_SCALE * (kv.first == PLAYER_ACTOR_ID ? 1.0f : BOT_VS_BOT_DAMAGE_SCALE);
         damageActor(kv.first, kv.second * scale, head[kv.first], at[kv.first], b.index, g.name);
     }
+    sound(shotSfx(b.gun.gun), muzzle);
     b.gun.count--;
     onShotFired(b.gunState, g);
     b.shotAnim = 0.12f;
