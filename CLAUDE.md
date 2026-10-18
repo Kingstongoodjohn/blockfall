@@ -10,7 +10,8 @@ are local accounts that play as AI teammates. There is no online server.
 
 The player-facing feature list and controls live in `README.md`.
 
-**Status:** v12 + battle bus deck fix. Project structure (this file, `docs/`) added 2026-10-18.
+**Status:** v13: sound effects, bot pathfinding, wall edit shape rules, README cleanup, MSVC
+build fix. `bin/Blockfall.exe` is still the v12 build (not rebuilt; that needs a release request).
 **Last updated:** 2026-10-18
 
 ## Stack
@@ -37,9 +38,11 @@ menu), or call it directly:
 - **Test:** `cmake -S . -B build-tests -A x64 -DBLOCKFALL_TESTS=ON`
   then `cmake --build build-tests --config Release --target blockfall_tests`
   then `build-tests\Release\blockfall_tests.exe`. It ends with `N passed, 0 failed`; exit code 0
-  means every check passed. (451 checks as of 2026-10-18, and the CPU frame-time check was ~1.9 ms.)
+  means every check passed. (486 checks as of 2026-10-18, and the CPU frame-time check was ~1.8 ms.)
+  Building without `--target` also builds `Blockfall.exe` into `build-tests\Release\`.
 - **Rendering smoke test:** `Blockfall.exe --shots <folder>` plays a scripted demo and saves
-  screenshots.
+  screenshots (`.bmp`) and `blockfall_log.txt`. The log says whether audio started
+  (`audio: XAudio2 ready`) and how many sound events played. It plays real sound for ~3 s.
 - **Regenerate skins:** edit `tools/character/skins_catalog.py`, then run the generator. It
   rewrites `src/game/skins_data.inc` and the textures in `assets/skins/`.
 
@@ -47,7 +50,9 @@ menu), or call it directly:
 ```
 src/core/        math (vectors, matrices, ray tests), RNG
 src/game/        ALL game rules, no Windows code (built as the blockfall_core library)
-src/platform/    Win32 window, input, Direct3D 11 renderer + shaders, scripted --shots demo
+                   nav.*  bot pathfinding (A*)    sfx.*  sound events + sound synthesis
+src/platform/    Win32 window, input, Direct3D 11 renderer + shaders, XAudio2 sound
+                 (audio_xaudio2.*), scripted --shots demo
 src/third_party/ cgltf.h, stb_image.h (vendored, do not edit)
 tests/tests.cpp  logic tests for blockfall_core
 tools/character/ Blender scripts: character model, rig, animations, skin catalogue
@@ -68,7 +73,15 @@ docs/decisions/  ADRs (NNNN-short-title.md)
   Floor, Ramp (stairs), Cone (pyramid). Materials are Wood/Brick/Metal. Pieces need support or
   they break.
 - **Editing:** walls use a 3×3 tile grid, floors/ramps/cones use 2×2. What a selected tile means
-  differs by piece type (cut out, raise a cone side, stair direction).
+  differs by piece type (cut out, raise a cone side, stair direction). Wall tiles are
+  `row*3+col`, row 0 at the bottom. A wall cut must be one rectangle with nothing left floating
+  (`validWallEdit` in `building.cpp`); other piece types have no shape rules.
+- **Sound:** game code calls `Game::sound(id, pos)` / `Game::soundUi(id)`; the platform layer
+  plays `Game::sounds` each frame and clears it. New sounds: add to `Sfx` in `sfx.h`, its name
+  in `sfxName`, its recipe in `synthSfx` and its range in `sfxRange`. See ADR 0002.
+- **Bot movement:** `Game::steerBot` walks straight at the target; when a bot is stuck on the
+  ground it calls `findPath` (`nav.h`) and follows the waypoints. Max `NAV_PLANS_PER_FRAME`
+  searches per frame. The old swerve-and-hop is the fallback.
 - **Rarity:** Common → Legendary; each step adds +5% damage.
 - **Knocked:** in team modes, zero HP with a teammate standing means crawling and bleeding out
   over 40 s; a teammate revives you by holding E for 5 s.
@@ -89,7 +102,9 @@ docs/decisions/  ADRs (NNNN-short-title.md)
 - **The skin list has one source of truth:** `tools/character/skins_catalog.py`. `skins_data.inc`
   is generated from it, so don't hand-edit the `.inc`.
 - **Game stats/tunables are named constants** at the top of headers (`game.h`, `types.h`,
-  `building.h`, `loot.h`). Change numbers there, not inline.
+  `building.h`, `loot.h`, `nav.h`, `sfx.h`). Change numbers there, not inline.
+- **Sounds are synthesised in code, XAudio2 is loaded at runtime** (no audio files, no import
+  library, silent if unavailable). See `docs/decisions/0002-synthesised-sound-xaudio2.md`.
 
 ## Hard rules
 - Never push a rebuilt `bin/Blockfall.exe` unless the tests pass and the user asked for a release
@@ -100,10 +115,10 @@ docs/decisions/  ADRs (NNNN-short-title.md)
 - Ask before changing `CMakeLists.txt` or `build.bat`.
 
 ## Gotchas
-- **Older README sections are stale.** The "What's in the game" section describes earlier
-  versions (5 m × 4 m cells, 16 players per match, "no fall damage"). **Trust the code and the
-  newest "What's new" section.** Don't change code to match old README text. Fix the README
-  instead, after asking.
+- **README "What's new in vN" sections are history.** They describe each version as it shipped,
+  so older ones contradict newer ones (e.g. v5 cone edits). The intro, "Lobby", "Controls",
+  "What's in the game" and "Known limits" were brought up to date for v13. **Trust the code**;
+  don't change code to match README text. Fix the README instead, after asking.
 - **C4996 warnings (`fopen`, `strcpy`, `strncpy`) from `src/third_party/cgltf.h` are expected.**
   They're in vendored code. Ignore them, and don't "fix" them by editing cgltf. Warnings from
   `src/game/` or `src/platform/` are real and should be fixed.
@@ -113,11 +128,26 @@ docs/decisions/  ADRs (NNNN-short-title.md)
   screenshot makes it permanently bigger.
 - **The tests need the working directory to be the repo root** if they load `assets/`. Run them
   from there.
+- **MSVC limits one string literal to ~16 KB (error C2026).** The HLSL shaders in
+  `renderer_d3d11.cpp` are raw strings; the scene shader is split into two adjacent literals
+  (`)" R"(`). If a shader grows past the limit again, split it again. MinGW has no such limit, so
+  a MinGW build passing doesn't prove MSVC works.
+- **`src/platform/` still has C4996 `fopen` warnings** (`main_win32.cpp`, `renderer_d3d11.cpp`).
+  They're real (not vendored) and haven't been fixed yet.
+- **Tests that check `Game::sounds`** should clear it first: nothing drains it in tests, and it
+  stops growing at `MAX_SOUND_EVENTS`.
+- **Bot tests:** park the player far away (or the bot will spot it and start a fight) and keep
+  other bots dead (`quietGame()`).
 
 ## Current state & next steps
 - Works: full match loop (lobby → bus → drop → loot/build/edit/fight → storm → victory), 100-player
   lobbies, 4 team modes, knocked/revive, 64 skins, item shop, local accounts, graphics settings,
-  logic tests.
-- Known limits: no sound, no pathfinding for bots, no online play, edits ignore door/window shape
-  rules (see README "Known limits").
-- Next: _decide with the user._
+  sound effects + volume setting, bot pathfinding when stuck, wall edit shape rules, logic tests.
+- Known limits: no online play, no music or looping sounds, bots plan paths on the ground only,
+  wall edit rules are simplified (see README "Known limits").
+- Not verified by ear: the sounds were tested in code and XAudio2 starts and plays, but nobody has
+  listened to them yet. Tune recipes in `synthSfx` if they sound off.
+- Small known issue: the Post-processing hint in Settings (`gfxOptionHint`) still mentions depth of
+  field when aiming, but depth of field is off in matches.
+- Next: _decide with the user._ Candidates: fix the `fopen` warnings, rebuild `bin/Blockfall.exe`
+  as a v13 release (needs the user's OK).
