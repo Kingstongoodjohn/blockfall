@@ -11,6 +11,26 @@ Keep the `assets` folder next to `bin` - that's where the character model and sk
 
 If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. The game isn't signed with a paid certificate, which is why Windows warns about it.
 
+## What's new in v14 - outfits, real hair, faces that move
+
+- **Outfit kit.** 14 modelled outfit pieces: jacket, hood, tactical vest, pauldrons, gauntlets,
+  shin guards, boots, belt, cape, scarf, backpack, goggles, bandana mask and a thigh holster.
+  Every skin wears its own combination (STEEL KNIGHT in metal armour and a cape, PILOT in a
+  leather jacket with goggles and a scarf...), coloured from its palette.
+- **Three body builds:** athletic, heavy and slim. The outfit pieces fit each one.
+- **Hair made of cards:** layered strips with a see-through strand texture instead of solid
+  shapes. Long hair, capes and scarves **swing** with spring physics: they trail behind when you
+  run and stream upward when you skydive.
+- **Faces:** real eyes, eyelids, brows and lips on face bones. Characters blink and change
+  expression: focused while aiming, straining while sprinting or swinging, hurt when hit, in
+  pain when knocked, smiling in the lobby.
+- **Detail maps:** one shared 4096 x 4096 normal map and material map (shine, metalness, shading,
+  what each spot is made of) cover the body and every outfit piece: sculpted muscles and folds,
+  armour ridges and rivets, cloth weave, leather grain, stitching and skin pores.
+- **CHARACTERS: STYLIZED / REALISTIC** (Settings → Graphics). Stylized keeps the cartoon look
+  with outlines. Realistic is physically based: shiny metal, matte cloth, skin that softens the
+  light, and a highlight running across hair.
+
 ## What's new in v13 - sound, smarter bots, real door shapes
 
 - **Sound.** 26 sound effects: each gun, reloads, hit markers (a "ding" on headshots), the
@@ -387,7 +407,7 @@ a path around whatever is in the way. Eliminated bots drop their gun and 50 mate
 
 ## Tests
 
-All the game rules live in `src/game/` and don't depend on Windows, so they can be tested anywhere. There are 486 checks covering every stage and every new feature. Some examples:
+All the game rules live in `src/game/` and don't depend on Windows, so they can be tested anywhere. There are 519 checks covering every stage and every new feature. Some examples:
 - Sprint is 1.5x and is blocked while aiming or shooting.
 - The aim ray hits the exact screen center.
 - Walls block movement.
@@ -404,6 +424,8 @@ All the game rules live in `src/game/` and don't depend on Windows, so they can 
 - Wall edits accept doors and windows and refuse floating or scattered cuts.
 - A bot walks out of a U-shaped trap and finds the door into a closed box.
 - Every sound effect synthesises cleanly, fades with distance and pans to the right side.
+- A cape sags under gravity, trails behind when running and lifts when falling; eyelids close
+  downward and the jaw drops the lower lip on the real model.
 
 To run them:
 
@@ -441,9 +463,13 @@ src/game/       all game rules (no Windows code)
   scene         turns the game into boxes for the renderer; attaches guns to hands
   model         loads assets/character.glb (cgltf), skeleton + animation sampling
   charanim      animation state system (clip picking, cross-fades, upper-body layer, aim pitch)
+  charphys      swinging hair, capes and scarves (spring physics on bone chains)
+  charface      facial expressions and blinking
 src/third_party cgltf (glTF loader), stb_image (PNG)
-assets/         character.glb + skins/*.png (made by tools/character/build_character.py)
-tools/character Blender scripts that build the character, textures and animations
+assets/         character.glb, character_normal.png + character_material.png (shared detail atlas)
+                and skins/*.png (all made by tools/character/build_character.py)
+tools/character Blender scripts that build the character, outfit kit, hair cards, face rig,
+                detail atlas, textures and animations
 src/platform/   Windows window, mouse/keyboard input, XAudio2 sound, Direct3D 11 renderer (shadow map,
                 G-buffer, AO, PBR, normal maps, LOD, FXAA/TAA, bloom/fog/DOF, GPU skinning + cartoon shader)
 tests/          logic tests
@@ -453,8 +479,9 @@ tests/          logic tests
 
 - Wall edit rules are a simplified version of Fortnite's (one rectangular opening, nothing
   floating), not its exact list of allowed shapes.
-- The character is one body shared by all skins (skins change the texture, hair and headband), and
-  the animations are scripted keyframes, not motion capture.
+- Skins are combinations of 3 builds and 14 shared outfit pieces, not 64 individually sculpted
+  models, and the "sculpting" is done by code, not by an artist. Animations are scripted
+  keyframes, not motion capture. Outfit pieces can clip through each other in extreme poses.
 - Bots only plan paths along the ground, and only once they're stuck. They don't plan routes up
   ramps or across upper floors, so tall builds can still trip them up.
 - Friends are local to your PC (AI teammates with their names), not real online players.
