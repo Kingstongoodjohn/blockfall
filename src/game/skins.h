@@ -1,8 +1,21 @@
 // Blockfall - skins (outfits) for the locker
 #pragma once
 #include "../core/math.h"
+#include <cstdint>
 
 namespace bf {
+
+// Outfit kit pieces (tools/character/kit.py). Bit i of Skin::kit = KIT_NAMES[i] is worn.
+enum class KitPiece : int { Jacket = 0, Hood, Vest, Pauldrons, Gauntlets, ShinGuards, Boots, Belt, Cape, Scarf,
+                            Backpack, Goggles, Mask, Holster, Count };
+const char* kitPieceName(KitPiece k);   // mesh name in character.glb ("jacket", "hood", ...)
+enum class BodyBuild : int { Athletic = 0, Heavy, Slim, Count };
+const char* bodyBuildName(int build);
+// What the main kit pieces are made of (sets shine and metalness in the Realistic style).
+enum class KitMaterial : int { Cloth = 0, Leather, Metal, Rubber, Count };
+const char* kitMaterialName(int m);
+// Roughness (0 mirror .. 1 matte) and metalness for a KitMaterial.
+void kitMaterialParams(int m, float& rough, float& metal);
 
 constexpr int SKIN_PRICE = 1200;      // K-Bucks, the RARE price (see skinPrice for the others)
 constexpr int KBUCKS_PER_KILL = 25;
@@ -17,7 +30,12 @@ struct Skin {
     int pattern;      // 0 plain, 1 stripes, 2 camo, 3 checker, 4 hex, 5 stars, 6 flames, 7 sash, 8 racing, 9 plaid, 10 two-tone, 11 chevrons, 12 lightning, 13 panelled
     int skinTone;
     int rarity;       // 0 uncommon, 1 rare, 2 epic, 3 legendary
+    int build;        // BodyBuild
+    uint32_t kit;     // bit per KitPiece
+    int kitMaterial;  // KitMaterial of the main kit pieces
+    bool wears(KitPiece k) const { return (kit >> (int)k) & 1u; }
 };
+Vec4 skinToneColor(int tone);   // SKIN_TONES in skins_catalog.py
 
 int skinCount();
 const Skin& skinAt(int i);   // 0 is the free default

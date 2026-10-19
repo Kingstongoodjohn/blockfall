@@ -1,10 +1,19 @@
 # Blockfall character builder.
 #
-# Builds the shared Blockfall character inside Blender (run with the `bpy` Python module or
-# `blender -b --python build_character.py`), then writes:
-#   assets/character.glb      the body (3 levels of detail), hair styles, headband, the shared
-#                             skeleton, and every animation
-#   assets/skins/<n>.png      one painted texture per locker skin
+# Builds the shared Blockfall character inside Blender, then writes:
+#   assets/character.glb            the body in 3 builds x 3 levels of detail, hair cards, hats,
+#                                   headband, face parts, the 14 outfit kit pieces, the shared
+#                                   skeleton (body + face + swing bones) and every animation
+#   assets/character_normal.png     shared 4096 detail atlas: baked normals ...
+#   assets/character_material.png   ... and roughness / metalness / AO / zone (see atlas.py)
+#   assets/skins/<n>.png            one painted texture per locker skin (only with --paint)
+#
+#   blender -b --factory-startup --python-use-system-env --python build_character.py -- [options]
+#     --out DIR      write somewhere else than assets/
+#     --paint        also repaint the 64 skin textures (only needed when the catalogue changes)
+#     --atlas N      atlas size (default 4096; 1024 for quick tests)
+#     --no-bake      skip the Cycles bakes (flat normals; fast layout checks)
+#   It needs Pillow in Blender's Python (PYTHONPATH pointing at a site-packages that has it).
 #
 # The body starts as a stick figure of joints with radii. Blender's Skin modifier wraps it in a
 # chunky rounded mesh (the Fortnite-ish look), Subdivision smooths it, and "Create Armature"
@@ -16,7 +25,30 @@ import numpy as np
 from mathutils import Vector, Matrix, Quaternion
 from PIL import Image, ImageDraw
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'assets')
+
+def _args():
+    argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
+    opts = {'out': os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'assets'),
+            'paint': False, 'atlas': 4096, 'bake': True}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '--out':
+            opts['out'] = argv[i + 1]; i += 1
+        elif a == '--paint':
+            opts['paint'] = True
+        elif a == '--atlas':
+            opts['atlas'] = int(argv[i + 1]); i += 1
+        elif a == '--no-bake':
+            opts['bake'] = False
+        elif a == '--preview':
+            opts['preview'] = argv[i + 1]; i += 1
+        i += 1
+    return opts
+
+
+OPTS = _args()
+OUT = OPTS['out']
 TEX = 2048
 FPS = 24
 
@@ -149,8 +181,9 @@ def shape_body(mesh):
         v.co = new
 
 
-def finalize_body(obj, arm):
-    """Applies Skin + Subdivision so the body is a real mesh, unwraps it, and makes the LODs."""
+def finalize_body(obj, arm, before_lods=None):
+    """Applies Skin + Subdivision so the body is a real mesh, unwraps it, and makes the LODs.
+    before_lods(obj) runs after the unwrap, so anything it adds (the atlas UVs) carries over."""
     with override(obj):
         bpy.ops.object.modifier_apply(modifier='Skin')
         bpy.ops.object.modifier_apply(modifier='Sub')
@@ -171,6 +204,8 @@ def finalize_body(obj, arm):
     uv = mesh.uv_layers.active.data
     for l in uv:
         l.uv = (l.uv[0] * 0.9, l.uv[1] * 0.9)
+    if before_lods:
+        before_lods(obj)
     lods = [obj]
     for i, ratio in enumerate((0.3, 0.08)):
         lod = obj.copy()
@@ -218,35 +253,10 @@ def sphere(bm, center, radius, segs=12, rings=8):
     bmesh.ops.create_uvsphere(bm, u_segments=segs, v_segments=rings, radius=1.0, matrix=m)
 
 
-def build_hair(arm):
+def build_hats(arm):
+    """Hats and the headband (the hair styles are cards now, see hair_cards.py)."""
     head = Vector(J['Head'][0])
     objs = []
-    # 0: spiky, swept back.
-    bm = bmesh.new()
-    for k in range(7):
-        a = (k - 3) * 0.2
-        x = (k - 3) * 0.055
-        m = Matrix.Translation(head + Vector((x, -0.03 + abs(k - 3) * 0.025, 0.215))) @ Matrix.Rotation(-0.95 + a * 0.4, 4, 'X') @ \
-            Matrix.Rotation((k - 3) * 0.28, 4, 'Y') @ Matrix.Diagonal((0.05, 0.05, 0.15, 1.0))
-        bmesh.ops.create_uvsphere(bm, u_segments=10, v_segments=6, radius=1.0, matrix=m)
-    sphere(bm, head + Vector((0, 0.02, 0.13)), (0.215, 0.225, 0.105))
-    objs.append(rigid_mesh('Hair0', bm, arm, UV_HAIR, head))
-    # 1: a flat cap of hair.
-    bm = bmesh.new()
-    sphere(bm, head + Vector((0, 0.03, 0.12)), (0.22, 0.235, 0.12), 16, 10)
-    objs.append(rigid_mesh('Hair1', bm, arm, UV_HAIR, head))
-    # 2: mohawk.
-    bm = bmesh.new()
-    for k in range(5):
-        m = Matrix.Translation(head + Vector((0, -0.12 + k * 0.07, 0.24))) @ Matrix.Rotation(-0.6 + k * 0.3, 4, 'X') @ \
-            Matrix.Diagonal((0.05, 0.075, 0.2, 1.0))
-        bmesh.ops.create_uvsphere(bm, u_segments=10, v_segments=6, radius=1.0, matrix=m)
-    objs.append(rigid_mesh('Hair2', bm, arm, UV_HAIR, head))
-    # 3: long, down the back.
-    bm = bmesh.new()
-    sphere(bm, head + Vector((0, 0.03, 0.12)), (0.22, 0.235, 0.12), 16, 10)
-    sphere(bm, head + Vector((0, 0.17, -0.12)), (0.19, 0.09, 0.3), 14, 10)
-    objs.append(rigid_mesh('Hair3', bm, arm, UV_HAIR, head))
     # Hats: baseball cap, beanie, helmet (all follow the head).
     bm = bmesh.new()
     sphere(bm, head + Vector((0, 0.03, 0.13)), (0.225, 0.235, 0.11), 16, 10)
@@ -888,17 +898,87 @@ def paint_textures(body, only=None):
 
 
 # ------------------------------------------------------------------ main
+def copy_object(src, name, positions=None):
+    """A copy of a mesh object (same weights, UVs and attributes), optionally with new positions."""
+    obj = src.copy()
+    obj.data = src.data.copy()
+    obj.name = name
+    obj.data.name = name
+    bpy.context.collection.objects.link(obj)
+    if positions is not None:
+        obj.data.vertices.foreach_set('co', np.asarray(positions, np.float32).ravel())
+        obj.data.update()
+    return obj
+
+
+def mesh_points(obj):
+    return np.array([v.co[:] for v in obj.data.vertices])
+
+
 def main():
+    import builds, rigging, kit, face, hair_cards, atlas
+    from meshutil import body_bvh, body_weights, make_object, fix_normals
     bpy.ops.wm.read_factory_settings(use_empty=True)
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o)
     scene = bpy.context.scene
     scene.render.fps = FPS
     body, arm = build_body()
-    lods = finalize_body(body, arm)
-    extras = build_hair(arm)
+    lods = finalize_body(body, arm, before_lods=lambda o: atlas.add_atlas_body(o, OPTS['atlas']))
+    bvh = body_bvh(body)
+    face_pts = rigging.add_extra_bones(arm, J, HK, bvh)
+    chains = rigging.swing_chains(J, HK)
+
+    # Body builds: reshaped copies sharing topology, UVs and weights.
+    for b in (1, 2):
+        for i, lod in enumerate(lods):
+            name = 'Body_B%d' % b + ('_LOD%d' % i if i else '')
+            o = copy_object(lod, name, builds.displace(mesh_points(lod), b, J, E))
+            o.parent = arm
+
+    extras = build_hats(arm)
+    hair = hair_cards.build_hair(bvh, arm, J, HK, chains)
+    face_obj, mouth_obj = face.build_face(face_pts, bvh, arm, J, HK)
+
+    # Outfit kit.
+    W, wnames = body_weights(body)
+    pieces = kit.build_pieces(J, HK, bvh)
+    kit_b0, copies = [], {}
+    for name in kit.KIT:
+        mb, spec = pieces[name]
+        pts = np.array(mb.v)
+        wspec = kit.piece_weights(name, spec, pts, body, bvh, W, wnames, J, chains)
+        objname = name if name in kit.HEAD_PIECES else name + '_B0'
+        if isinstance(wspec, tuple) and isinstance(wspec[0], str):   # ('rigid', bone)
+            obj = make_object(objname, mb, arm, rigid=wspec[1])
+        elif isinstance(wspec, tuple):
+            obj = make_object(objname, mb, arm, weights=wspec[0], names=wspec[1])   # extra (chain) bones
+        else:
+            obj = make_object(objname, mb, arm, weights=wspec, names=wnames)
+        fix_normals(obj)
+        kit_b0.append(obj)
+        if name not in kit.HEAD_PIECES:
+            copies[obj.name] = []
+            for b in (1, 2):
+                o = copy_object(obj, '%s_B%d' % (name, b), builds.displace(pts, b, J, E))
+                o.parent = arm
+                copies[obj.name].append(o)
+    from meshutil import Z_SKIN, Z_DARK, Z_HAIR
+    fix_normals(face_obj, away_from=[face_pts['eye_L'], face_pts['eye_R']], zones={Z_SKIN, Z_DARK})
+    fix_normals(mouth_obj, facing=(0, -1, 0), zones={Z_DARK})
+    for h in hair:
+        fix_normals(h, away_from=[(0, 0.01, J['Head'][0][2])], zones={Z_HAIR})
+
     build_animations(arm)
-    paint_textures(body)
+    if OPTS['paint']:
+        paint_textures(body)
+
+    # Atlas: UV layout always (the game needs the second UV set), bakes unless --no-bake.
+    atlas.layout_kit(kit_b0 + [face_obj, mouth_obj] + hair, OPTS['atlas'], copies)
+    for o in extras:
+        atlas.set_neutral_atlas(o)
+    eyes = [face_pts['eye_L'], face_pts['eye_R']]
+    atlas.build_atlas(body, kit_b0, [face_obj, mouth_obj], hair, J, HK, OPTS['atlas'], OUT, bake=OPTS['bake'], eye_points=eyes)
     os.makedirs(OUT, exist_ok=True)
     for o in bpy.data.objects:
         o.select_set(True)
@@ -915,6 +995,9 @@ def main():
                               export_optimize_animation_size=False, use_selection=True)
     print('body tris', sum(len(o.data.polygons) for o in lods), [len(o.data.polygons) for o in lods])
     print('wrote', os.path.join(OUT, 'character.glb'))
+    if OPTS.get('preview'):
+        import kit_preview
+        kit_preview.render(OPTS['preview'], ['STEEL KNIGHT', 'PILOT', 'RAVEN', 'ARCTIC OPS', 'DESERT HAWK', 'VIOLET STORM'], arm)
 
 
 if __name__ == '__main__':

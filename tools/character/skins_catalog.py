@@ -84,6 +84,90 @@ SKINS = [
 
 PATTERN_NAME = ['PLAIN', 'STRIPES', 'CAMO', 'CHECKER', 'HEX', 'STARS', 'FLAMES', 'SASH', 'RACING', 'PLAID', 'TWO-TONE', 'CHEVRONS', 'LIGHTNING', 'PANELLED']
 
+# ---- outfits: body build, outfit kit pieces and what the main kit pieces are made of.
+# The kit pieces are modelled once (tools/character/kit.py) and shared; each skin wears its own
+# combination, coloured from its palette (shirt = main, pants = secondary, accent = trim).
+BUILDS = ['ATHLETIC', 'HEAVY', 'SLIM']
+KIT = ['jacket', 'hood', 'vest', 'pauldrons', 'gauntlets', 'shinguards', 'boots', 'belt', 'cape', 'scarf',
+       'backpack', 'goggles', 'mask', 'holster']
+MATERIALS = ['cloth', 'leather', 'metal', 'rubber']
+OUTFITS = {
+    # name:            (build, [kit pieces], main material)
+    'RECRUIT':         (0, ['belt', 'boots'], 'cloth'),
+    'CRIMSON FANG':    (0, ['jacket', 'scarf', 'gauntlets'], 'leather'),
+    'NIGHT OWL':       (2, ['hood', 'mask', 'cape'], 'cloth'),
+    'MINT RUNNER':     (2, ['belt'], 'rubber'),
+    'SUNBURST':        (0, ['vest', 'goggles'], 'rubber'),
+    'VIOLET STORM':    (2, ['cape', 'gauntlets'], 'cloth'),
+    'ARCTIC OPS':      (1, ['vest', 'hood', 'backpack', 'boots'], 'rubber'),
+    'GOLD RUSH':       (1, ['pauldrons', 'belt', 'gauntlets'], 'metal'),
+    'JUNGLE CAT':      (0, ['vest', 'holster', 'boots'], 'cloth'),
+    'BUBBLEGUM':       (2, ['backpack'], 'rubber'),
+    'STEEL KNIGHT':    (1, ['pauldrons', 'gauntlets', 'shinguards', 'belt', 'cape'], 'metal'),
+    'EMBER':           (0, ['jacket', 'mask'], 'leather'),
+    'TIDE':            (2, ['goggles', 'belt'], 'rubber'),
+    'BANANA SPLIT':    (1, ['backpack', 'boots'], 'cloth'),
+    'RAVEN':           (2, ['cape', 'hood', 'mask'], 'cloth'),
+    'SNOW FOX':        (2, ['scarf', 'jacket', 'boots'], 'cloth'),
+    'CIRCUIT':         (0, ['vest', 'goggles', 'gauntlets'], 'rubber'),
+    'LUMBERJACK':      (1, ['jacket', 'boots', 'belt'], 'cloth'),
+    'COBALT':          (0, ['pauldrons', 'belt'], 'metal'),
+    'DESERT HAWK':     (0, ['scarf', 'goggles', 'holster', 'boots'], 'cloth'),
+    'NEON PULSE':      (2, ['jacket', 'mask'], 'rubber'),
+    'ROSEWOOD':        (2, ['cape', 'belt'], 'leather'),
+    'PILOT':           (0, ['jacket', 'goggles', 'scarf', 'holster'], 'leather'),
+    'SURF':            (2, ['goggles'], 'rubber'),
+    'GRAPHITE':        (1, ['vest', 'holster', 'shinguards'], 'rubber'),
+    'WILDFIRE':        (0, ['jacket', 'gauntlets', 'boots'], 'leather'),
+    'MOSS':            (1, ['hood', 'backpack', 'boots'], 'cloth'),
+    'ORBIT':           (0, ['vest', 'backpack', 'gauntlets', 'boots'], 'rubber'),
+    'CHERRY BOMB':     (2, ['jacket', 'belt'], 'leather'),
+    'SANDSTORM':       (0, ['scarf', 'mask', 'goggles'], 'cloth'),
+    'VOLT':            (2, ['gauntlets', 'goggles'], 'rubber'),
+    'GLACIER':         (1, ['pauldrons', 'cape'], 'metal'),
+    'BRICKLAYER':      (1, ['vest', 'belt', 'boots', 'gauntlets'], 'cloth'),
+    'PHANTOM':         (2, ['hood', 'cape', 'mask'], 'cloth'),
+    'HONEYBEE':        (2, ['backpack', 'goggles'], 'rubber'),
+    'TOXIC':           (0, ['vest', 'mask', 'gauntlets'], 'rubber'),
+    'ADMIRAL':         (1, ['jacket', 'belt', 'pauldrons'], 'cloth'),
+    'MIDNIGHT':        (0, ['cape', 'hood'], 'cloth'),
+    'CORAL':           (2, ['scarf'], 'cloth'),
+    'BLOCKFALL CHAMP': (1, ['pauldrons', 'cape', 'belt', 'gauntlets', 'shinguards'], 'metal'),
+    'SPEEDSTER':       (2, ['goggles', 'boots'], 'rubber'),
+    'HIGHLANDER':      (1, ['belt', 'scarf', 'boots'], 'cloth'),
+    'SPLIT SECOND':    (2, ['jacket', 'gauntlets'], 'rubber'),
+    'ARROWHEAD':       (0, ['hood', 'holster', 'gauntlets', 'boots'], 'leather'),
+    'THUNDERCLAP':     (1, ['pauldrons', 'cape', 'gauntlets'], 'metal'),
+    'RIDGE RUNNER':    (0, ['jacket', 'backpack', 'boots'], 'cloth'),
+    'LAVENDER':        (2, ['scarf', 'belt'], 'cloth'),
+    'OUTLAW':          (0, ['jacket', 'holster', 'scarf', 'mask'], 'leather'),
+    'SKYLINE':         (0, ['vest', 'goggles', 'backpack'], 'rubber'),
+    'CANDY CANE':      (1, ['scarf', 'boots'], 'cloth'),
+    'REDWOOD':         (1, ['jacket', 'boots', 'backpack'], 'leather'),
+    'STATIC':          (2, ['hood', 'gauntlets'], 'rubber'),
+    'MARINER':         (0, ['jacket', 'belt'], 'cloth'),
+    'INFERNO KING':    (1, ['pauldrons', 'cape', 'gauntlets', 'belt'], 'metal'),
+    'MEADOW':          (2, ['hood', 'backpack'], 'cloth'),
+    'BLUE STEEL':      (1, ['pauldrons', 'shinguards', 'gauntlets'], 'metal'),
+    'SUNSET':          (2, ['scarf', 'goggles'], 'cloth'),
+    'GHOST':           (2, ['hood', 'cape'], 'cloth'),
+    'TANGERINE':       (0, ['vest', 'boots'], 'rubber'),
+    'SHADOW OPS':      (1, ['vest', 'mask', 'holster', 'gauntlets', 'boots'], 'rubber'),
+    'BERRY':           (2, ['jacket', 'belt'], 'leather'),
+    'PRISM':           (0, ['cape', 'pauldrons', 'gauntlets'], 'metal'),
+    'DRIFTER':         (0, ['hood', 'scarf', 'backpack', 'boots'], 'cloth'),
+    'ROYAL GUARD':     (1, ['pauldrons', 'belt', 'cape', 'shinguards'], 'metal'),
+}
+
+
+def outfit(name):
+    """(build, kit bitmask, material index) for a skin."""
+    build, pieces, mat = OUTFITS[name]
+    mask = 0
+    for p in pieces:
+        mask |= 1 << KIT.index(p)
+    return build, mask, MATERIALS.index(mat)
+
 
 def slug(name):
     return name.lower().replace(' ', '_')
@@ -91,12 +175,15 @@ def slug(name):
 
 def write_cpp(path):
     lines = ['// Generated by tools/character/skins_catalog.py - do not edit by hand.',
-             '// name, shirt, pants, hair, accent, hat colour, hair style, hat, headband, pattern, skin tone, rarity']
+             '// name, shirt, pants, hair, accent, hat colour, hair style, hat, headband, pattern, skin tone, rarity,',
+             '// body build, outfit kit pieces (bit per KIT entry), kit material']
     for s in SKINS:
         name, shirt, pants, hair, accent, hat, hs, hatk, band, pat, tone, rar = s
+        build, kit, mat = outfit(name)
         c = lambda v: '{%.2ff, %.2ff, %.2ff, 1}' % v
-        lines.append('    {"%s", %s, %s, %s, %s, %s, %d, %d, %s, %d, %d, %d},' % (
-            name, c(shirt), c(pants), c(hair), c(accent), c(hat), hs, hatk, 'true' if band else 'false', pat, tone, rar))
+        lines.append('    {"%s", %s, %s, %s, %s, %s, %d, %d, %s, %d, %d, %d, %d, 0x%04xu, %d},' % (
+            name, c(shirt), c(pants), c(hair), c(accent), c(hat), hs, hatk, 'true' if band else 'false', pat, tone, rar,
+            build, kit, mat))
     with open(path, 'w') as f:
         f.write('\n'.join(lines) + '\n')
 
