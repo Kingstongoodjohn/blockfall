@@ -39,6 +39,12 @@ struct CharacterDraw {
     int hair = 0;     // hair style mesh (0..3), -1 none
     int hat = 0;      // 0 none, 1 cap, 2 beanie, 3 helmet
     bool headband = false;
+    int build = 0;          // BodyBuild
+    uint32_t kit = 0;       // outfit pieces worn (bit per KitPiece)
+    int kitMaterial = 0;    // KitMaterial of the main pieces
+    bool face = true;       // draw the 3D face parts (close up)
+    // Palette for the outfit pieces, hair and face (the body uses its painted skin texture).
+    Vec4 main, second, trim, hairColor, skinTone;
     float distance = 0;   // metres from the camera (the renderer picks the level of detail)
     int boneOffset = 0;   // into SceneList::boneMats
     int boneCount = 0;

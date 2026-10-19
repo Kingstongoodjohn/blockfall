@@ -7,6 +7,7 @@
 #include "../game/frontend.h"
 #include "../game/model.h"
 #include "../game/map.h"
+#include "../game/skins.h"
 #include "audio_xaudio2.h"
 #include "input_win32.h"
 #include "renderer_d3d11.h"
@@ -257,7 +258,7 @@ struct Demo {
         if (f == 406) press(r, KEY_TAB);
         if (f > 384 && f < 520 && (f < 396 || f > 406)) {
             hold(r, KEY_MOUSE_RIGHT);
-            if (f % 9 == 0) press(r, KEY_MOUSE_LEFT);
+            if (f % 9 == 0 && (f < 503 || f > 519)) press(r, KEY_MOUSE_LEFT);
             g.player.shield = 100;  // keep the camera alive for the photos
             g.player.health = 100;
         }
@@ -272,6 +273,42 @@ struct Demo {
         if (f > 470 && f < 500) hold(r, 'E');
         if (f == 490) pendingShot = "07c_knocked_revive.bmp";
         if (f == 500) g.revive(0);
+        // Character close-ups: a teammate stands in front of the camera in different outfits,
+        // in both character styles (checks outfit pieces, hair cards, faces and materials).
+        if (f >= 503 && f <= 523) {
+            auto skinNamed = [](const char* name) {
+                for (int i = 0; i < skinCount(); ++i)
+                    if (std::strcmp(skinAt(i).name, name) == 0) return i;
+                return 0;
+            };
+            Bot& mate = g.bots[0];
+            Vec3 fwd(std::sin(g.player.yaw), 0, std::cos(g.player.yaw));
+            Vec3 side(fwd.z, 0, -fwd.x);
+            for (Bot& b : g.bots)   // everyone else out of the picture
+                if (b.team == 0 && b.index != mate.index) park(g, b, g.player.body.pos - side * (6.0f + b.index * 1.5f) - fwd * 2.0f);
+            park(g, mate, g.player.body.pos + fwd * 1.25f + side * 0.55f);
+            mate.yaw = g.player.yaw + PI;
+            mate.gun = Item::makePickaxe();   // arms down, so the face shows
+            mate.state = AIState::Wander;
+            mate.targetId = NO_TARGET;
+            mate.skin = f <= 508 ? skinNamed("STEEL KNIGHT") : (f <= 512 ? skinNamed("PILOT") : (f <= 516 ? skinNamed("RAVEN") : skinNamed("STEEL KNIGHT")));
+            fe.settings.characterStyle = f <= 507 ? 0 : 1;
+            if (f >= 520) {
+                // Face close-up: head right in front of the camera.
+                Vec3 eye = g.camera.eye, cf = g.camera.forward;
+                Vec3 flat = normalize(Vec3(cf.x, 0, cf.z));
+                park(g, mate, eye + flat * 0.75f - Vec3(0, 1.72f, 0));
+                mate.body.pos.y = eye.y - 1.72f;
+                mate.yaw = std::atan2(-flat.x, -flat.z);
+                mate.skin = skinNamed("CORAL");
+            }
+        }
+        if (f == 506) pendingShot = "07d_closeup_knight_stylized.bmp";
+        if (f == 510) pendingShot = "07e_closeup_pilot_realistic.bmp";
+        if (f == 514) pendingShot = "07f_closeup_raven_realistic.bmp";
+        if (f == 518) pendingShot = "07g_closeup_knight_realistic.bmp";
+        if (f == 521) pendingShot = "07h_closeup_face_realistic.bmp";
+        if (f == 524) fe.settings.characterStyle = 0;
         if (f == 440) press(r, 'R');  // reload animation
         if (f == 452) pendingShot = "07b_reload_anim.bmp";
         if (f == 460) pendingShot = "07_teamfight_icons.bmp";
@@ -475,6 +512,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
 
         if (visible) {
             app.renderer.setGraphics(fe.settings.gfx);
+            app.renderer.setCharacterStyle(fe.settings.characterStyle);
             app.renderer.setTerrain(fe.game.world);
             if (fe.game.world.generation != mapGeneration) {
                 buildMapImage(fe.game.world, MAP_IMAGE_SIZE, mapImage);

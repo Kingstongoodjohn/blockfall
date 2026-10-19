@@ -1,5 +1,6 @@
 // Blockfall - character model loading (glTF via cgltf) and skeletal animation maths
 #include "model.h"
+#include "skins.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -16,6 +17,9 @@
 #endif
 
 namespace bf {
+
+static_assert((int)KitPiece::Count <= MAX_KIT, "raise MAX_KIT");
+static_assert((int)BodyBuild::Count <= MAX_BUILDS, "raise MAX_BUILDS");
 
 // ------------------------------------------------------------------ quaternions
 // Hamilton product p*q: rotate by q first, then by p (column-vector convention, like glTF).
@@ -61,6 +65,45 @@ Mat4 quatToMat(const Quat& q) {
     m.m[1][0] = 2 * (x * y - z * w);     m.m[1][1] = 1 - 2 * (x * x + z * z); m.m[1][2] = 2 * (y * z + x * w);
     m.m[2][0] = 2 * (x * z + y * w);     m.m[2][1] = 2 * (y * z - x * w);     m.m[2][2] = 1 - 2 * (x * x + y * y);
     return m;
+}
+
+Quat quatFromMat(const Mat4& mIn) {
+    // Undo the transposed storage (see quatToMat), normalising rows to drop any scale.
+    float r[3][3];
+    for (int i = 0; i < 3; ++i) {
+        float len = std::sqrt(mIn.m[i][0] * mIn.m[i][0] + mIn.m[i][1] * mIn.m[i][1] + mIn.m[i][2] * mIn.m[i][2]);
+        if (len < 1e-8f) len = 1;
+        for (int j = 0; j < 3; ++j) r[j][i] = mIn.m[i][j] / len;   // r = column-vector rotation matrix
+    }
+    Quat q;
+    float tr = r[0][0] + r[1][1] + r[2][2];
+    if (tr > 0) {
+        float s = std::sqrt(tr + 1.0f) * 2;
+        q = {(r[2][1] - r[1][2]) / s, (r[0][2] - r[2][0]) / s, (r[1][0] - r[0][1]) / s, 0.25f * s};
+    } else if (r[0][0] > r[1][1] && r[0][0] > r[2][2]) {
+        float s = std::sqrt(1.0f + r[0][0] - r[1][1] - r[2][2]) * 2;
+        q = {0.25f * s, (r[0][1] + r[1][0]) / s, (r[0][2] + r[2][0]) / s, (r[2][1] - r[1][2]) / s};
+    } else if (r[1][1] > r[2][2]) {
+        float s = std::sqrt(1.0f + r[1][1] - r[0][0] - r[2][2]) * 2;
+        q = {(r[0][1] + r[1][0]) / s, 0.25f * s, (r[1][2] + r[2][1]) / s, (r[0][2] - r[2][0]) / s};
+    } else {
+        float s = std::sqrt(1.0f + r[2][2] - r[0][0] - r[1][1]) * 2;
+        q = {(r[0][2] + r[2][0]) / s, (r[1][2] + r[2][1]) / s, 0.25f * s, (r[1][0] - r[0][1]) / s};
+    }
+    return quatNormalize(q);
+}
+
+Quat quatFromTo(const Vec3& fromIn, const Vec3& toIn) {
+    Vec3 a = normalize(fromIn), b = normalize(toIn);
+    float d = dot(a, b);
+    if (d > 0.99999f) return {0, 0, 0, 1};
+    if (d < -0.99999f) {
+        Vec3 axis = cross(Vec3(1, 0, 0), a);
+        if (length(axis) < 1e-4f) axis = cross(Vec3(0, 1, 0), a);
+        return quatAxisAngle(axis, PI);
+    }
+    Vec3 c = cross(a, b);
+    return quatNormalize({c.x, c.y, c.z, 1.0f + d});
 }
 
 Vec3 quatRotate(const Quat& q, const Vec3& v) {
@@ -183,12 +226,13 @@ bool CharacterModel::load(const std::string& path, std::string& error) {
         mm.name = n->name ? n->name : (n->mesh->name ? n->mesh->name : "");
         for (cgltf_size pi = 0; pi < n->mesh->primitives_count; ++pi) {
             const cgltf_primitive& prim = n->mesh->primitives[pi];
-            const cgltf_accessor *pos = nullptr, *nrm = nullptr, *uv = nullptr, *jnt = nullptr, *wgt = nullptr;
+            const cgltf_accessor *pos = nullptr, *nrm = nullptr, *uv = nullptr, *uv2 = nullptr, *jnt = nullptr, *wgt = nullptr;
             for (cgltf_size ai = 0; ai < prim.attributes_count; ++ai) {
                 const cgltf_attribute& a = prim.attributes[ai];
                 if (a.type == cgltf_attribute_type_position) pos = a.data;
                 else if (a.type == cgltf_attribute_type_normal) nrm = a.data;
                 else if (a.type == cgltf_attribute_type_texcoord && a.index == 0) uv = a.data;
+                else if (a.type == cgltf_attribute_type_texcoord && a.index == 1) uv2 = a.data;
                 else if (a.type == cgltf_attribute_type_joints && a.index == 0) jnt = a.data;
                 else if (a.type == cgltf_attribute_type_weights && a.index == 0) wgt = a.data;
             }
@@ -202,6 +246,9 @@ bool CharacterModel::load(const std::string& path, std::string& error) {
                 if (nrm && cgltf_accessor_read_float(nrm, vi, f, 3)) { v.nx = -f[0]; v.ny = f[1]; v.nz = f[2]; }
                 else { v.ny = 1; }
                 if (uv && cgltf_accessor_read_float(uv, vi, f, 2)) { v.u = f[0]; v.v = f[1]; }
+                v.u2 = v.u;
+                v.v2 = v.v;
+                if (uv2 && cgltf_accessor_read_float(uv2, vi, f, 2)) { v.u2 = f[0]; v.v2 = f[1]; }
                 cgltf_uint j[4] = {0, 0, 0, 0};
                 if (jnt) cgltf_accessor_read_uint(jnt, vi, j, 4);
                 float w[4] = {1, 0, 0, 0};
@@ -230,6 +277,22 @@ bool CharacterModel::load(const std::string& path, std::string& error) {
             }
         }
         int id = (int)meshes.size();
+        // Builds: "Body_B1", "Body_B1_LOD2"... (build 0 keeps the plain names below).
+        for (int b = 1; b < MAX_BUILDS; ++b)
+            for (int l = 0; l < 3; ++l) {
+                std::string want = "Body_B" + std::to_string(b) + (l ? "_LOD" + std::to_string(l) : "");
+                if (mm.name == want) buildLod[b][l] = id;
+            }
+        // Outfit pieces: "<piece>_B<build>", or just "<piece>" when it fits every build.
+        for (int k = 0; k < (int)KitPiece::Count && k < MAX_KIT; ++k) {
+            std::string piece = kitPieceName((KitPiece)k);
+            if (mm.name == piece)
+                for (int b = 0; b < MAX_BUILDS; ++b) kit[k][b] = id;
+            for (int b = 0; b < MAX_BUILDS; ++b)
+                if (mm.name == piece + "_B" + std::to_string(b)) kit[k][b] = id;
+        }
+        if (mm.name == "Face") face = id;
+        else if (mm.name == "Mouth") mouth = id;
         if (mm.name == "Body") bodyLod[0] = id;
         else if (mm.name == "Body_LOD1") bodyLod[1] = id;
         else if (mm.name == "Body_LOD2") bodyLod[2] = id;
@@ -250,6 +313,10 @@ bool CharacterModel::load(const std::string& path, std::string& error) {
     }
     if (bodyLod[1] < 0) bodyLod[1] = bodyLod[0];
     if (bodyLod[2] < 0) bodyLod[2] = bodyLod[1];
+    for (int l = 0; l < 3; ++l) buildLod[0][l] = bodyLod[l];
+    for (int b = 1; b < MAX_BUILDS; ++b)
+        for (int l = 0; l < 3; ++l)
+            if (buildLod[b][l] < 0) buildLod[b][l] = l > 0 && buildLod[b][l - 1] >= 0 ? buildLod[b][l - 1] : bodyLod[l];
 
     // Animations.
     clips.clear();
@@ -297,6 +364,24 @@ bool CharacterModel::load(const std::string& path, std::string& error) {
     cgltf_free(data);
     loaded = true;
     return true;
+}
+
+int CharacterModel::meshIndex(const std::string& name) const {
+    for (size_t i = 0; i < meshes.size(); ++i)
+        if (meshes[i].name == name) return (int)i;
+    return -1;
+}
+
+int CharacterModel::bodyMesh(int build, int lod) const {
+    build = build < 0 || build >= MAX_BUILDS ? 0 : build;
+    lod = lod < 0 ? 0 : (lod > 2 ? 2 : lod);
+    return buildLod[build][lod];
+}
+
+int CharacterModel::kitMesh(int piece, int build) const {
+    if (piece < 0 || piece >= MAX_KIT) return -1;
+    build = build < 0 || build >= MAX_BUILDS ? 0 : build;
+    return kit[piece][build] >= 0 ? kit[piece][build] : kit[piece][0];
 }
 
 int CharacterModel::boneIndex(const char* name) const {
@@ -376,6 +461,23 @@ void CharacterModel::rotateInCharacterFrame(int bone, const Quat& q, Pose& p) co
     const Quat& W = bones[bone].restWorldR;
     Quat x = hamilton(hamilton(quatConj(W), q), W);
     p.r[bone] = quatNormalize(hamilton(p.r[bone], x));
+}
+
+void CharacterModel::offsetInCharacterFrame(int bone, const Vec3& offset, Pose& p) const {
+    if (bone < 0 || bone >= (int)bones.size()) return;
+    // A bone's translation is in its parent's space: turn the offset into that space at rest.
+    int par = bones[bone].parent;
+    Quat parentRest = par >= 0 ? bones[par].restWorldR : Quat();
+    p.t[bone] = bones[bone].restT + quatRotate(quatConj(parentRest), offset);
+}
+
+void CharacterModel::rotateBoneInModel(int bone, const Quat& q, const Mat4* world, Pose& p) const {
+    if (bone < 0 || bone >= (int)bones.size()) return;
+    // world[parent] holds the parent's current model-space rotation Rp. The bone's model rotation
+    // is Rp*L; we want q*Rp*L, so the new local rotation is Rp^-1 * q * Rp * L.
+    int par = bones[bone].parent;
+    Quat rp = par >= 0 ? quatFromMat(world[par]) : quatFromMat(rootXform);
+    p.r[bone] = quatNormalize(hamilton(quatConj(rp), hamilton(q, hamilton(rp, p.r[bone]))));
 }
 
 Vec3 CharacterModel::bonePosition(const Mat4* world, int bone) const {

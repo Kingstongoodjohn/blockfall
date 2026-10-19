@@ -18,6 +18,8 @@
 #include "game/skins.h"
 #include "game/model.h"
 #include "game/charanim.h"
+#include "game/charface.h"
+#include "game/charphys.h"
 #include "game/account.h"
 #include <cstdlib>
 #include <fstream>
@@ -2165,8 +2167,58 @@ static void testCharacterModel() {
     bool ok = model.load("assets/character.glb", err);
     CHECK(ok, "loads: %s", err.c_str());
     if (!ok) return;
-    CHECK(model.bones.size() == 22, "22 bones in the shared skeleton (%d)", (int)model.bones.size());
+    CHECK(model.bones.size() == 40 && (int)model.bones.size() <= MAX_BONES, "40 bones: body 22, face 7, swing chains 11 (%d)", (int)model.bones.size());
     CHECK(model.clips.size() >= 17, "%d animation clips", (int)model.clips.size());
+
+    // Outfits: every build and kit piece is in the file, plus the face parts and atlas UVs.
+    bool builds = true, kit = true;
+    for (int b = 0; b < MAX_BUILDS; ++b)
+        for (int l = 0; l < 3; ++l) builds = builds && model.bodyMesh(b, l) >= 0;
+    builds = builds && model.bodyMesh(1, 0) != model.bodyMesh(0, 0) && model.bodyMesh(2, 0) != model.bodyMesh(0, 0);
+    for (int k = 0; k < (int)KitPiece::Count; ++k)
+        for (int b = 0; b < MAX_BUILDS; ++b) kit = kit && model.kitMesh(k, b) >= 0;
+    CHECK(builds, "three body builds, three LODs each");
+    CHECK(kit, "all 14 kit pieces for every build");
+    CHECK(model.face >= 0 && model.mouth >= 0, "face parts and lips");
+    bool atlasUv = false;
+    for (const SkinnedVertex& v : model.meshes[model.bodyLod[0]].verts)
+        atlasUv = atlasUv || std::fabs(v.u2 - v.u) > 1e-3f || std::fabs(v.v2 - v.v) > 1e-3f;
+    CHECK(atlasUv, "the body has its own atlas UVs (second UV set)");
+    SwingRig swing;
+    swing.build(model);
+    FaceRig faceRig;
+    faceRig.build(model);
+    CHECK(swing.count == 3 && faceRig.valid(), "hair, cape and scarf chains and the face bones (%d chains)", swing.count);
+    // The face bones move the real face parts the right way.
+    {
+        auto meanY = [&](int mesh, int bone, const Pose& p) {
+            Mat4 w[MAX_BONES], sk[MAX_BONES];
+            model.boneWorld(p, w);
+            model.skinMatrices(w, sk);
+            double sum = 0;
+            int n = 0;
+            for (const SkinnedVertex& v : model.meshes[mesh].verts)
+                if (v.joints[0] == bone && v.weights[0] > 0.99f) {
+                    sum += transformPoint(Vec3(v.px, v.py, v.pz), sk[bone]).y;
+                    ++n;
+                }
+            return n ? (float)(sum / n) : 0.0f;
+        };
+        Pose rest, p;
+        model.restPose(rest);
+        p = rest;
+        model.rotateInCharacterFrame(faceRig.lidL, quatAxisAngle(Vec3(1, 0, 0), FACE_LID_ANGLE), p);
+        float lid0 = meanY(model.face, faceRig.lidL, rest), lid1 = meanY(model.face, faceRig.lidL, p);
+        CHECK(lid1 < lid0 - 0.005f, "closing the eyelid moves it down (%.4f m)", lid0 - lid1);
+        p = rest;
+        model.rotateInCharacterFrame(faceRig.jaw, quatAxisAngle(Vec3(1, 0, 0), FACE_JAW_ANGLE), p);
+        float jaw0 = meanY(model.mouth, faceRig.jaw, rest), jaw1 = meanY(model.mouth, faceRig.jaw, p);
+        CHECK(jaw1 < jaw0 - 0.002f, "opening the jaw drops the lower lip (%.4f m)", jaw0 - jaw1);
+        p = rest;
+        model.offsetInCharacterFrame(faceRig.browL, Vec3(0, FACE_BROW_LIFT, 0), p);
+        float b0 = meanY(model.face, faceRig.browL, rest), b1 = meanY(model.face, faceRig.browL, p);
+        CHECK(std::fabs(b1 - b0 - FACE_BROW_LIFT) < 0.001f, "raising a brow lifts it %.4f m", b1 - b0);
+    }
     for (const char* name : {"idle", "walk", "sprint", "crouch", "crouch_walk", "jump", "skydive", "glide", "aim", "shoot", "reload",
                              "build", "heal", "swing", "pick_idle", "wave", "dance"})
         CHECK(model.clip(name) != nullptr, "has clip %s", name);
@@ -2478,6 +2530,197 @@ static void testSound() {
     CHECK(std::fabs(l.volume - 0.3f) < 1e-4f, "bad volume ignored");
 }
 
+// A tiny skeleton for the swing and face tests: a "Chest" root with a scarf chain and the
+// seven face bones. Every bone gets an odd rest rotation (like real glTF bones), and its offset
+// is given in model space, so the joints sit where the numbers say.
+static CharacterModel tinyRig(bool horizontalChain) {
+    CharacterModel m;
+    Rng rng(3);
+    auto add = [&](const char* name, int parent, Vec3 modelOffset) {
+        Bone b;
+        b.name = name;
+        b.parent = parent;
+        b.restR = quatAxisAngle(normalize(Vec3(rng.range(-1, 1), rng.range(-1, 1), rng.range(-1, 1))), rng.range(0.3f, 2.5f));
+        Quat parentW = parent >= 0 ? m.bones[parent].restWorldR : Quat();
+        b.restT = quatRotate(quatConj(parentW), modelOffset);
+        b.restWorldR = quatMul(b.restR, parentW);   // parent's rotation, then the bone's own
+        m.bones.push_back(b);
+        return (int)m.bones.size() - 1;
+    };
+    int chest = add("Chest", -1, Vec3(0, 1.5f, 0));
+    Vec3 step = horizontalChain ? Vec3(0, 0, -0.15f) : Vec3(0, -0.15f, 0);
+    int s1 = add("Scarf_1", chest, Vec3(0, 0, -0.1f));
+    int s2 = add("Scarf_2", s1, step);
+    add("Scarf_end", s2, step);
+    int head = add("Head", chest, Vec3(0, 0.3f, 0));
+    add("Jaw", head, Vec3(0, -0.03f, 0.05f));
+    add("Brow_L", head, Vec3(-0.06f, 0.06f, 0.1f));
+    add("Brow_R", head, Vec3(0.06f, 0.06f, 0.1f));
+    add("Lid_L", head, Vec3(-0.06f, 0.02f, 0.1f));
+    add("Lid_R", head, Vec3(0.06f, 0.02f, 0.1f));
+    add("Mouth_L", head, Vec3(-0.03f, -0.06f, 0.11f));
+    add("Mouth_R", head, Vec3(0.03f, -0.06f, 0.11f));
+    m.loaded = true;
+    return m;
+}
+
+static void testSecondaryMotion() {
+    section("Swinging capes and scarves, faces");
+    // quatFromMat undoes quatToMat; quatFromTo turns one direction into another.
+    Quat q = quatAxisAngle(normalize(Vec3(0.3f, 1, -0.4f)), 1.1f);
+    Quat back = quatFromMat(quatToMat(q));
+    float qd = std::fabs(q.x * back.x + q.y * back.y + q.z * back.z + q.w * back.w);
+    CHECK(qd > 0.9999f, "quatFromMat round trip (%.5f)", qd);
+    Vec3 to = quatRotate(quatFromTo(Vec3(0, 0, 1), Vec3(1, 1, 0)), Vec3(0, 0, 1));
+    CHECK(length(to - normalize(Vec3(1, 1, 0))) < 1e-4f, "quatFromTo turns z toward (1,1,0)");
+
+    auto chainPos = [](const CharacterModel& m, const Pose& p, const Mat4& root, Vec3* out) {
+        Mat4 w[MAX_BONES];
+        m.boneWorld(p, w);
+        for (int k = 0; k < 3; ++k) out[k] = transformPoint(m.bonePosition(w, m.boneIndex(k == 0 ? "Scarf_1" : (k == 1 ? "Scarf_2" : "Scarf_end"))), root);
+    };
+
+    // A chain sticking straight out backward sags under gravity (it must not swing up).
+    {
+        CharacterModel m = tinyRig(true);
+        SwingRig rig;
+        rig.build(m);
+        CHECK(rig.count == 1 && rig.chains[0].count == 3, "finds the scarf chain (%d chains)", rig.count);
+        SwingState st;
+        Mat4 root = Mat4::identity();
+        Pose p;
+        Vec3 c[3];
+        for (int f = 0; f < 120; ++f) {
+            m.restPose(p);
+            applySwing(m, rig, st, root, DT, 1u, p);
+        }
+        chainPos(m, p, root, c);
+        // The spring toward the animated pose holds most of the shape; it must sag down, not up.
+        CHECK(c[2].y < 1.5f - 0.02f && std::fabs(c[2].x) < 0.01f, "a horizontal chain sags under gravity (end y %.3f, was 1.500)", c[2].y);
+        float l1 = length(c[1] - c[0]), l2 = length(c[2] - c[1]);
+        CHECK(std::fabs(l1 - 0.15f) < 0.01f && std::fabs(l2 - 0.15f) < 0.01f, "segments keep their length (%.3f, %.3f)", l1, l2);
+        bool finite = std::isfinite(c[2].x) && std::isfinite(c[2].y) && std::isfinite(c[2].z);
+        CHECK(finite, "no NaNs");
+    }
+    // A hanging chain at rest stays put; running drags it behind, falling lifts it.
+    {
+        CharacterModel m = tinyRig(false);
+        SwingRig rig;
+        rig.build(m);
+        SwingState st;
+        Pose p;
+        Vec3 c[3];
+        Mat4 root = Mat4::identity();
+        for (int f = 0; f < 120; ++f) {
+            m.restPose(p);
+            applySwing(m, rig, st, root, DT, 1u, p);
+        }
+        chainPos(m, p, root, c);
+        CHECK(std::fabs(c[2].z - (-0.1f)) < 0.02f && c[2].y < 1.25f, "a hanging chain stays hanging (end %.2f, %.2f)", c[2].y, c[2].z);
+        float z = 0;
+        for (int f = 0; f < 60; ++f) {
+            z += 5.0f * DT;   // run forward (+z) at 5 m/s
+            root = Mat4::translation(Vec3(0, 0, z));
+            m.restPose(p);
+            applySwing(m, rig, st, root, DT, 1u, p);
+        }
+        chainPos(m, p, root, c);
+        CHECK(c[2].z - z < -0.15f, "running forward drags it back (tip %.2f m behind)", z - c[2].z);
+        float y = 0;
+        for (int f = 0; f < 60; ++f) {
+            y -= 25.0f * DT;   // skydive
+            root = Mat4::translation(Vec3(0, y, z));
+            m.restPose(p);
+            applySwing(m, rig, st, root, DT, 1u, p);
+        }
+        chainPos(m, p, root, c);
+        CHECK(c[2].y - y > c[0].y - y - 0.1f, "falling fast lifts it (tip %.2f vs root %.2f)", c[2].y - y, c[0].y - y);
+        root = Mat4::translation(Vec3(100, 0, 0));   // teleport: starts again from the animated pose
+        m.restPose(p);
+        applySwing(m, rig, st, root, DT, 1u, p);
+        chainPos(m, p, root, c);
+        CHECK(std::fabs(c[2].y - 1.2f) < 0.02f, "a teleport resets the chain (%.2f)", c[2].y);
+    }
+    // Faces: blinking, and expressions moving the right bones the right way.
+    {
+        CharacterModel m = tinyRig(false);
+        FaceRig rig;
+        rig.build(m);
+        CHECK(rig.valid(), "finds the seven face bones");
+        FaceState st;
+        Pose p;
+        float most = 0;
+        for (int f = 0; f < 60 * 8; ++f) {
+            m.restPose(p);
+            applyFace(m, rig, st, Expression::Neutral, DT, p);
+            most = std::max(most, faceLidClosure(st));
+        }
+        CHECK(most > 0.9f, "the eyes blink (lids reach %.2f)", most);
+        Pose rest;
+        m.restPose(rest);
+        FaceState happy;
+        for (int f = 0; f < 60; ++f) {
+            m.restPose(p);
+            applyFace(m, rig, happy, Expression::Happy, DT, p);
+        }
+        int ml = m.boneIndex("Mouth_L"), bl = m.boneIndex("Brow_L");
+        Mat4 wr[MAX_BONES], wp[MAX_BONES];
+        m.boneWorld(rest, wr);
+        m.boneWorld(p, wp);
+        float lift = m.bonePosition(wp, ml).y - m.bonePosition(wr, ml).y;
+        CHECK(lift > 0.002f, "smiling lifts the mouth corners (%.4f m)", lift);
+        CHECK(m.bonePosition(wp, bl).y > m.bonePosition(wr, bl).y + 0.001f, "happy raises the brows");
+        FaceState pain;
+        for (int f = 0; f < 60; ++f) {
+            m.restPose(p);
+            applyFace(m, rig, pain, Expression::Pain, DT, p);
+        }
+        CHECK(pain.now.lids > 0.5f && pain.now.mouthOpen > 0.4f, "pain squints and opens the mouth");
+        CHECK(std::string(expressionName(Expression::Focused)) == "FOCUSED", "expression names");
+    }
+}
+
+static void testOutfits() {
+    section("Outfits: builds, kit pieces, character style");
+    bool valid = true, capeAndPack = false;
+    int wearers[(int)KitPiece::Count] = {};
+    int builds[(int)BodyBuild::Count] = {};
+    for (int i = 0; i < skinCount(); ++i) {
+        const Skin& s = skinAt(i);
+        valid = valid && s.build >= 0 && s.build < (int)BodyBuild::Count && s.kitMaterial >= 0 &&
+                s.kitMaterial < (int)KitMaterial::Count && (s.kit >> (int)KitPiece::Count) == 0;
+        if (s.build >= 0 && s.build < (int)BodyBuild::Count) builds[s.build]++;
+        for (int k = 0; k < (int)KitPiece::Count; ++k) wearers[k] += s.wears((KitPiece)k);
+        capeAndPack = capeAndPack || (s.wears(KitPiece::Cape) && s.wears(KitPiece::Backpack));
+    }
+    CHECK(valid, "every skin has a valid build, kit and material");
+    int unused = 0;
+    for (int k = 0; k < (int)KitPiece::Count; ++k) unused += wearers[k] == 0;
+    CHECK(unused == 0, "every kit piece is worn by someone (%d unused)", unused);
+    CHECK(builds[0] > 5 && builds[1] > 5 && builds[2] > 5, "all three builds are used (%d/%d/%d)", builds[0], builds[1], builds[2]);
+    CHECK(!capeAndPack, "nobody wears a cape over a backpack");
+    CHECK(skinAt(10).wears(KitPiece::Pauldrons) && skinAt(10).kitMaterial == (int)KitMaterial::Metal, "STEEL KNIGHT wears metal pauldrons");
+    float r, mtl;
+    kitMaterialParams((int)KitMaterial::Metal, r, mtl);
+    float rc, mc;
+    kitMaterialParams((int)KitMaterial::Cloth, rc, mc);
+    CHECK(mtl == 1.0f && mc == 0.0f && r < rc, "metal is shiny and metallic, cloth matte");
+    CHECK(std::string(kitPieceName(KitPiece::Holster)) == "holster" && std::string(bodyBuildName(1)) == "HEAVY", "names");
+    Settings s;
+    s.characterStyle = 1;
+    Settings l;
+    l.parse(s.serialize());
+    CHECK(l.characterStyle == 1, "character style is saved");
+    // Each character's draw carries its build, kit and palette.
+    Game g(7);
+    SceneList sc;
+    buildScene(g, 16.0f / 9.0f, sc);
+    bool carries = !sc.characters.empty();
+    for (const CharacterDraw& c : sc.characters)
+        carries = carries && c.build >= 0 && c.build < 3 && c.skinTone.w > 0;
+    if (characterModel()) CHECK(carries, "character draws carry build and palette");
+}
+
 static void testPerformance() {
     section("Performance (CPU side of one frame)");
     Game g;
@@ -2536,6 +2779,8 @@ int main() {
     testFallShockBots();
     testPathfinding();
     testSound();
+    testSecondaryMotion();
+    testOutfits();
     testPerformance();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

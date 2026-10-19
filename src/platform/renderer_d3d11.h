@@ -49,6 +49,9 @@ public:
     bool loadMaterialTextures(const std::string& dir, std::string& error);
     bool hasMaterialTextures() const { return matAlbedoSrv_ != nullptr; }
     int skinTextureCount() const { return (int)skinSrv_.size(); }
+    bool hasCharacterAtlas() const { return charNormalSrv_ && charMaterialSrv_; }
+    // 0 stylized (cartoon steps + outline), 1 realistic (PBR) characters.
+    void setCharacterStyle(int style) { charStyle_ = style; }
     // The map picture for the mini map / map screen. `generation` changes when the map does.
     void setMapImage(const std::vector<uint32_t>& rgba, int size, int generation);
     // dofFocus: metres in front of the camera that stay sharp (0 = no depth of field this frame).
@@ -171,6 +174,12 @@ private:
     ID3D11VertexShader* vsSkin_ = nullptr;
     ID3D11VertexShader* vsSkinShadow_ = nullptr;
     ID3D11VertexShader* vsSkinOutline_ = nullptr;
+    ID3D11VertexShader* vsSkinShadowUV_ = nullptr;
+    ID3D11PixelShader* psCharShadowClip_ = nullptr;
+    // Shared character detail atlas (assets/character_normal.png, character_material.png).
+    ID3D11ShaderResourceView* charNormalSrv_ = nullptr;
+    ID3D11ShaderResourceView* charMaterialSrv_ = nullptr;
+    int charStyle_ = 0;
     ID3D11PixelShader* psChar_ = nullptr;
     ID3D11PixelShader* psOutline_ = nullptr;
     ID3D11InputLayout* layoutSkin_ = nullptr;

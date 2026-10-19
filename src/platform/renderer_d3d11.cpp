@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include "../game/atlas.h"
+#include "../game/skins.h"
 #include <filesystem>
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -322,21 +323,35 @@ PSOut PSMain(VSOut i, bool front : SV_IsFrontFace) {
     return o;
 }
 
-// ---- skinned characters: each vertex is moved by up to 4 bones, then lit with a cartoon shader
-cbuffer Bones : register(b1) { row_major float4x4 bones[32]; };
+)"  // a third literal: the character shaders (each literal must stay under MSVC's ~16 KB)
+R"(
+// ---- skinned characters: each vertex is moved by up to 4 bones. Two looks: Stylized (cartoon
+// steps + outline) and Realistic (PBR). The shared detail atlas adds baked normals, roughness,
+// metalness, AO and a zone per texel; outfit pieces, hair and face parts take their colour from
+// the zone palette, the body from its painted skin texture.
+cbuffer Bones : register(b1) { row_major float4x4 bones[48]; };
 cbuffer Char : register(b2) {
     row_major float4x4 charWorld;
     float4 charTint;
     float4 charAccent;
     float4 charParams;   // x glow, y hurt flash, z accent strength, w outline width
+    float4 charFlags;    // x mesh kind (0 body, 1 painted mesh, 2 atlas mesh), y face parts drawn, z style (1 realistic), w atlas loaded
+    float4 zoneColor[16];
+    float4 zoneMat[16];  // x roughness, y metalness (each -1 = use the atlas)
 };
 Texture2D skinTex : register(t1);
+Texture2D charNormal : register(t4);
+Texture2D charMaterial : register(t5);
 SamplerState skinSamp : register(s2);
+
+// Zones (tools/character/meshutil.py).
+static const int Z_CUT = 0, Z_ACCENT = 3, Z_HAIR = 6, Z_SKIN = 7, Z_LIPS = 10, Z_BODY = 11, Z_BODY_SKIN = 13;
 
 struct VSSkinIn {
     float3 pos     : POSITION;
     float3 nrm     : NORMAL;
-    float2 uv      : TEXCOORD;
+    float2 uv      : TEXCOORD0;
+    float2 uv2     : TEXCOORD1;
     uint4  joints  : JOINTS;
     float4 weights : WEIGHTS;
 };
@@ -345,6 +360,7 @@ struct VSSkinOut {
     float3 wpos : TEXCOORD0;
     float3 nrm  : TEXCOORD1;
     float2 uv   : TEXCOORD2;
+    float2 uv2  : TEXCOORD3;
 };
 
 float4x4 skinMatrix(VSSkinIn i) {
@@ -360,6 +376,7 @@ VSSkinOut VSSkin(VSSkinIn i) {
     o.wpos = wp.xyz;
     o.nrm = normalize(mul(float4(i.nrm, 0.0), S).xyz);
     o.uv = i.uv;
+    o.uv2 = i.uv2;
     return o;
 }
 
@@ -376,6 +393,7 @@ VSSkinOut VSSkinOutline(VSSkinIn i) {
     o.wpos = wp.xyz;
     o.nrm = n;
     o.uv = i.uv;
+    o.uv2 = i.uv2;
     return o;
 }
 
@@ -384,45 +402,158 @@ float4 VSSkinShadow(VSSkinIn i) : SV_Position {
     return mul(mul(float4(i.pos, 1.0), S), lightViewProj);
 }
 
-PSOut PSChar(VSSkinOut i, bool front : SV_IsFrontFace) {
-    int lighting = (int)gfx.w, pbr = (int)gfx.z, smooth = (int)gfx.x;
+// Hair cards in the shadow map: the see-through gaps must not cast shadows.
+struct VSShadowUV { float4 pos : SV_Position; float2 uv2 : TEXCOORD0; };
+VSShadowUV VSSkinShadowUV(VSSkinIn i) {
+    VSShadowUV o;
+    float4x4 S = mul(skinMatrix(i), charWorld);
+    o.pos = mul(mul(float4(i.pos, 1.0), S), lightViewProj);
+    o.uv2 = i.uv2;
+    return o;
+}
+
+int atlasZone(float2 uv) {
+    uint w, h;
+    charMaterial.GetDimensions(w, h);
+    // An exact texel (no filtering, no mips): averaging two zone numbers would make a third.
+    return (int)(charMaterial.Load(int3(int2(frac(uv) * float2(w, h)), 0)).a * 255.0 / 16.0);
+}
+
+void PSCharShadowClip(VSShadowUV i) {
+    if (charFlags.w > 0.5 && atlasZone(i.uv2) == Z_CUT) discard;
+}
+
+// Normal mapping without stored tangents: the tangent frame comes from how the position and
+// the UVs change across the pixel ("cotangent frame").
+float3 perturbNormal(float3 N, float3 p, float2 uv, float3 tn, out float3 B) {
+    float3 dp1 = ddx(p), dp2 = ddy(p);
+    float2 duv1 = ddx(uv), duv2 = ddy(uv);
+    float3 dp2perp = cross(dp2, N), dp1perp = cross(N, dp1);
+    float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    B = dp2perp * duv1.y + dp1perp * duv2.y;
+    float invmax = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-20));
+    T *= invmax;
+    B *= invmax;
+    return normalize(T * tn.x + B * tn.y + N * tn.z);
+}
+
+struct CharSurf {
+    float3 albedo, n, ngeo, strand;
+    float rough, metal, ao;
+    int zone;
+};
+
+CharSurf charSurface(VSSkinOut i, bool front) {
+    CharSurf s;
     float3 n = normalize(i.nrm);
     if (!front) n = -n;
-    float4 tex = skinTex.Sample(skinSamp, i.uv);
-    float3 albedo = tex.rgb * charTint.rgb;
-    albedo = lerp(albedo, charAccent.rgb, tex.a * charParams.z);   // team trim
-    albedo = lerp(albedo, float3(1, 1, 1), charParams.y * 0.6);     // hurt flash
+    s.ngeo = n;
+    s.n = n;
+    s.strand = float3(0, -1, 0);
+    s.rough = 0.7;
+    s.metal = 0.0;
+    s.ao = 1.0;
+    s.zone = Z_BODY;
+    int kind = (int)(charFlags.x + 0.5);
+    if (charFlags.w > 0.5) {
+        s.zone = atlasZone(i.uv2);
+        if (s.zone == Z_CUT) discard;
+        float4 m = charMaterial.Sample(skinSamp, i.uv2);
+        s.rough = m.r;
+        s.metal = m.g;
+        s.ao = m.b;
+        float3 tn = charNormal.Sample(skinSamp, i.uv2).xyz * 2.0 - 1.0;
+        tn.y = -tn.y;   // baked with +v up the image; the game's v runs down it
+        float3 B;
+        s.n = perturbNormal(n, i.wpos, i.uv2, tn, B);
+        s.strand = normalize(B);
+    }
+    bool painted = kind != 2 && (s.zone == Z_BODY || s.zone == Z_BODY_SKIN || (s.zone == Z_SKIN && charFlags.y < 0.5));
+    if (painted) {
+        float4 tex = skinTex.Sample(skinSamp, i.uv);
+        s.albedo = tex.rgb * charTint.rgb;
+        s.albedo = lerp(s.albedo, charAccent.rgb, tex.a * charParams.z);   // team trim
+    } else {
+        s.albedo = zoneColor[s.zone].rgb;
+        if (s.zone == Z_ACCENT) s.albedo = lerp(s.albedo, charAccent.rgb, charParams.z);
+        float4 zm = zoneMat[s.zone];
+        if (zm.x >= 0.0) s.rough = saturate(zm.x + (s.rough - 0.5) * 0.4);
+        if (zm.y >= 0.0) s.metal = zm.y;
+    }
+    s.albedo = lerp(s.albedo, float3(1, 1, 1), charParams.y * 0.6);   // hurt flash
+    return s;
+}
 
+PSOut PSChar(VSSkinOut i, bool front : SV_IsFrontFace) {
+    int lighting = (int)gfx.w, pbr = (int)gfx.z, smooth = (int)gfx.x;
+    CharSurf s = charSurface(i, front);
     float3 v = normalize(eyePos.xyz - i.wpos);
     float3 l = -sunDir.xyz;
-    float ndl = dot(n, l);
-    float ndv = saturate(dot(n, v));
-    float shadow = shadowFactor(i.wpos, n, saturate(ndl));
     float3 sunCol = float3(1.0, 0.95, 0.85);
+    float shadow = shadowFactor(i.wpos, s.ngeo, saturate(dot(s.ngeo, l)));
     float3 ambient;
     if (lighting <= 0) ambient = float3(0.5, 0.5, 0.5);
-    else ambient = lerp(float3(0.40, 0.38, 0.34), float3(0.58, 0.70, 0.88), n.y * 0.5 + 0.5) * (lighting >= 3 ? 1.08 : 1.0);
-    ambient *= 0.68;
+    else ambient = lerp(float3(0.40, 0.38, 0.34), float3(0.58, 0.70, 0.88), s.n.y * 0.5 + 0.5) * (lighting >= 3 ? 1.08 : 1.0);
+    float3 c;
 
-    // Cartoon lighting: two soft steps instead of a smooth ramp (Smooth Shading Off = hard steps).
-    float lit = ndl * shadow;
-    float soft = smooth > 0 ? 0.08 : 0.01;
-    float band = smoothstep(0.02 - soft, 0.02 + soft, lit) * 0.6 + smoothstep(0.45 - soft, 0.45 + soft, lit) * 0.4;
-    float3 c = albedo * (ambient + sunCol * band * 1.05);
-    // A small sharp highlight on shiny-ish bits.
-    if (pbr >= 1) {
+    if (charFlags.z < 0.5) {
+        // Stylized: two soft light steps (Smooth Shading Off = hard steps). The baked detail
+        // shows inside the steps, at half strength so the cartoon look stays.
+        float3 n = normalize(lerp(s.ngeo, s.n, 0.5));
+        float lit = dot(n, l) * shadow;
+        float soft = smooth > 0 ? 0.08 : 0.01;
+        float band = smoothstep(0.02 - soft, 0.02 + soft, lit) * 0.6 + smoothstep(0.45 - soft, 0.45 + soft, lit) * 0.4;
+        ambient *= 0.68 * lerp(1.0, s.ao, 0.7);
+        c = s.albedo * (ambient + sunCol * band * 1.05);
+        if (pbr >= 1) {
+            float3 h = normalize(l + v);
+            float shine = 1.0 - s.rough;
+            float spec = smoothstep(0.93 - shine * 0.05, 0.97, saturate(dot(n, h))) * (0.08 + 0.3 * shine) * band;
+            c += spec * sunCol * lerp(float3(1, 1, 1), s.albedo, s.metal);
+        }
+        float rim = pow(1.0 - saturate(dot(n, v)), 3.0) * smoothstep(0.1, 0.4, lit + 0.2);
+        c += rim * 0.3 * (ambient + sunCol * 0.3);
+    } else {
+        // Realistic: physically based. Skin lets light wrap round and glow red at the shadow
+        // edge (a cheap stand-in for light scattering under the skin); hair gets a highlight
+        // that runs across the strands.
+        float3 n = s.n;
+        float ndl = dot(n, l);
+        float ndv = max(dot(n, v), 1e-3);
+        bool skin = s.zone == Z_SKIN || s.zone == Z_BODY_SKIN || s.zone == Z_LIPS;
+        float diffuseTerm = skin ? saturate((ndl + 0.45) / 1.45) : saturate(ndl);
+        ambient *= 0.62 * s.ao;
+        c = s.albedo * (1.0 - s.metal) * (ambient + sunCol * diffuseTerm * shadow * 1.1);
+        if (skin) c += s.albedo * float3(0.30, 0.07, 0.03) * saturate(1.0 - abs(ndl) * 2.2) * shadow;
+        float3 F0 = lerp(float3(0.04, 0.04, 0.04), s.albedo, s.metal);
         float3 h = normalize(l + v);
-        float spec = smoothstep(0.93, 0.97, saturate(dot(n, h))) * 0.12 * band;
-        c += spec * sunCol;
+        if (s.zone == Z_HAIR) {
+            float th = dot(s.strand, h);
+            float kk = pow(sqrt(saturate(1.0 - th * th)), 70.0) * 0.35 + pow(sqrt(saturate(1.0 - th * th)), 12.0) * 0.08;
+            c += kk * sunCol * lerp(float3(1, 1, 1), s.albedo, 0.5) * shadow * saturate(ndl + 0.3);
+        } else if (pbr >= 1 && ndl > 0.0) {
+            float ndh = saturate(dot(n, h));
+            float a = max(s.rough * s.rough, 0.02), a2 = a * a;
+            float dd = ndh * ndh * (a2 - 1.0) + 1.0;
+            float D = a2 / (3.14159 * dd * dd);
+            float k = (s.rough + 1.0) * (s.rough + 1.0) / 8.0;
+            float G = (ndl / (ndl * (1.0 - k) + k)) * (ndv / (ndv * (1.0 - k) + k));
+            float3 F = F0 + (1.0 - F0) * pow(1.0 - saturate(dot(v, h)), 5.0);
+            float3 spec = D * G * F / max(4.0 * ndl * ndv, 0.05);
+            c += min(spec, 8.0) * sunCol * ndl * shadow;
+        }
+        // Sky and ground reflected in shiny and metal surfaces, strongest at grazing angles.
+        float3 F = F0 + (1.0 - F0) * pow(1.0 - ndv, 5.0);
+        float3 r = reflect(-v, n);
+        float3 env = lerp(float3(0.36, 0.42, 0.30), skyColor.rgb, saturate(r.y * 0.5 + 0.5));
+        c += env * F * (1.0 - s.rough) * (0.3 + 0.7 * s.metal) * s.ao;
+        c += pow(1.0 - ndv, 4.0) * 0.12 * ambient;
     }
-    // Rim light so characters pop off the background.
-    float rim = pow(1.0 - ndv, 3.0) * smoothstep(0.1, 0.4, lit + 0.2);
-    c += rim * 0.3 * (ambient + sunCol * 0.3);
-    c += albedo * charParams.x * 0.7;
+    c += s.albedo * charParams.x * 0.7;
 
     PSOut o;
     o.color = float4(c, 1.0);
-    o.normal = float4(n * 0.5 + 0.5, 0.8);
+    o.normal = float4(s.n * 0.5 + 0.5, s.rough);
     return o;
 }
 
@@ -671,7 +802,15 @@ struct HudVertex {
 struct CharCB {
     Mat4 world = Mat4::identity();
     Vec4 tint, accent, params;
+    Vec4 flags;            // x mesh kind, y face parts drawn, z style, w atlas loaded
+    Vec4 zoneColor[16];
+    Vec4 zoneMat[16];      // x roughness, y metalness (-1 = from the atlas)
 };
+
+// Atlas zones (tools/character/meshutil.py; keep the two lists in step).
+enum CharZone { ZONE_CUT = 0, ZONE_MAIN, ZONE_SECOND, ZONE_ACCENT, ZONE_LEATHER, ZONE_METAL, ZONE_HAIR, ZONE_SKIN, ZONE_EYE,
+                ZONE_DARK, ZONE_LIPS, ZONE_BODY, ZONE_LENS, ZONE_BODY_SKIN };
+enum CharMeshKind { KIND_BODY = 0, KIND_PAINTED = 1, KIND_ATLAS = 2 };
 
 bool compile(const char* src, const char* entry, const char* target, ID3DBlob** out, std::string& error) {
     ID3DBlob* err = nullptr;
@@ -1024,10 +1163,12 @@ bool RendererD3D11::compileShaders(std::string& error, bool sm5) {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"JOINTS", 0, DXGI_FORMAT_R8G8B8A8_UINT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"WEIGHTS", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 36, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"JOINTS", 0, DXGI_FORMAT_R8G8B8A8_UINT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"WEIGHTS", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 44, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };
-    hr = dev_->CreateInputLayout(elSkin, 5, vsb->GetBufferPointer(), vsb->GetBufferSize(), &layoutSkin_);
+    static_assert(sizeof(SkinnedVertex) == 60, "the skinned input layout expects 60-byte vertices");
+    hr = dev_->CreateInputLayout(elSkin, 6, vsb->GetBufferPointer(), vsb->GetBufferSize(), &layoutSkin_);
     safeRelease(vsb);
     if (FAILED(hr) || !vsSkin_) { error = "Failed to create skinned vertex shader."; return false; }
     if (!compile(kSceneShader, "VSSkinOutline", vsT, &vsb, error)) return false;
@@ -1036,6 +1177,13 @@ bool RendererD3D11::compileShaders(std::string& error, bool sm5) {
     if (!compile(kSceneShader, "VSSkinShadow", vsT, &vsb, error)) return false;
     dev_->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vsSkinShadow_);
     safeRelease(vsb);
+    if (!compile(kSceneShader, "VSSkinShadowUV", vsT, &vsb, error)) return false;
+    dev_->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vsSkinShadowUV_);
+    safeRelease(vsb);
+    if (!compile(kSceneShader, "PSCharShadowClip", psT, &psb, error)) return false;
+    dev_->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &psCharShadowClip_);
+    safeRelease(psb);
+    if (!vsSkinShadowUV_ || !psCharShadowClip_) { error = "Failed to create hair shadow shaders."; return false; }
     if (!compile(kSceneShader, "PSChar", psT, &psb, error)) return false;
     dev_->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &psChar_);
     safeRelease(psb);
@@ -1457,6 +1605,8 @@ bool RendererD3D11::setCharacterModel(const CharacterModel& model, const std::st
     for (Mesh& m : charMeshes_) releaseMesh(m);
     charMeshes_.clear();
     for (ID3D11ShaderResourceView*& s : skinSrv_) safeRelease(s);
+    safeRelease(charNormalSrv_);
+    safeRelease(charMaterialSrv_);
     for (ID3D11Texture2D*& t : skinTex_) safeRelease(t);
     skinSrv_.clear();
     skinTex_.clear();
@@ -1497,6 +1647,14 @@ bool RendererD3D11::setCharacterModel(const CharacterModel& model, const std::st
         skinSrv_.push_back(srv);
     }
     if (skinSrv_.empty()) { error = "No skin textures in " + skinDir; return false; }
+    // The shared detail atlas sits next to the skins folder. Optional: without it characters use
+    // their painted textures only (and the outfit pieces aren't drawn).
+    std::string atlasDir = std::filesystem::path(skinDir).parent_path().string();
+    if (!loadSkinTexture(atlasDir + "/character_normal.png", &charNormalSrv_) ||
+        !loadSkinTexture(atlasDir + "/character_material.png", &charMaterialSrv_)) {
+        safeRelease(charNormalSrv_);
+        safeRelease(charMaterialSrv_);
+    }
     charModel_ = &model;
     return true;
 }
@@ -1506,12 +1664,18 @@ void RendererD3D11::drawCharacters(const SceneList& scene, bool shadowPass) {
     static const float lod1At[4] = {8, 14, 24, 40};
     static const float lod2At[4] = {20, 35, 60, 110};
     int detail = gfx_.get(GfxOption::MeshDetail);
+    const bool atlas = hasCharacterAtlas();
+    const bool realistic = charStyle_ == 1 && atlas;
     ctx_->IASetInputLayout(layoutSkin_);
     ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ID3D11Buffer* cbs[3] = {cbFrame_, cbBones_, cbChar_};
     ctx_->VSSetConstantBuffers(0, 3, cbs);
     ctx_->PSSetConstantBuffers(0, 3, cbs);
     ctx_->PSSetSamplers(2, 1, &sampSkin_);
+    if (atlas) {
+        ID3D11ShaderResourceView* maps[2] = {charNormalSrv_, charMaterialSrv_};
+        ctx_->PSSetShaderResources(4, 2, maps);
+    }
     D3D11_MAPPED_SUBRESOURCE ms;
     auto drawMesh = [&](int id) {
         if (id < 0 || id >= (int)charMeshes_.size()) return;
@@ -1522,6 +1686,14 @@ void RendererD3D11::drawCharacters(const SceneList& scene, bool shadowPass) {
         ctx_->DrawIndexed(mesh.indexCount, 0, 0);
         if (!shadowPass) triangles_ += mesh.indexCount / 3;
     };
+    CharCB cb;
+    auto upload = [&](int kind) {
+        cb.flags.x = (float)kind;
+        if (SUCCEEDED(ctx_->Map(cbChar_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+            std::memcpy(ms.pData, &cb, sizeof cb);
+            ctx_->Unmap(cbChar_, 0);
+        }
+    };
     for (const CharacterDraw& c : scene.characters) {
         if (c.boneCount <= 0 || c.boneOffset + c.boneCount > (int)scene.boneMats.size()) continue;
         if (SUCCEEDED(ctx_->Map(cbBones_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
@@ -1529,39 +1701,92 @@ void RendererD3D11::drawCharacters(const SceneList& scene, bool shadowPass) {
             ctx_->Unmap(cbBones_, 0);
         }
         int lod = c.distance < lod1At[detail] ? 0 : (c.distance < lod2At[detail] ? 1 : 2);
-        float outline = c.distance < lod2At[detail] ? 0.009f : 0.0f;
-        if (SUCCEEDED(ctx_->Map(cbChar_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
-            CharCB* cc = (CharCB*)ms.pData;
-            cc->world = c.world;
-            cc->tint = c.tint;
-            cc->accent = c.accent;
-            cc->params = Vec4(c.params.x, c.params.y, c.params.z, outline);
-            ctx_->Unmap(cbChar_, 0);
+        float outline = !realistic && c.distance < lod2At[detail] ? 0.009f : 0.0f;
+        const bool close = lod < 2;
+        const bool faceParts = atlas && close && c.face;
+
+        // Palette: what each atlas zone looks like on this skin.
+        cb.world = c.world;
+        cb.tint = c.tint;
+        cb.accent = c.accent;
+        cb.params = Vec4(c.params.x, c.params.y, c.params.z, outline);
+        cb.flags = Vec4(0, faceParts ? 1.0f : 0.0f, realistic ? 1.0f : 0.0f, atlas ? 1.0f : 0.0f);
+        for (int z = 0; z < 16; ++z) {
+            cb.zoneColor[z] = Vec4(1, 1, 1, 1);
+            cb.zoneMat[z] = Vec4(-1, -1, 0, 0);
         }
+        float kr = 0.85f, km = 0.0f;
+        kitMaterialParams(c.kitMaterial, kr, km);
+        cb.zoneColor[ZONE_MAIN] = c.main;
+        cb.zoneColor[ZONE_SECOND] = c.second;
+        cb.zoneColor[ZONE_ACCENT] = c.trim;
+        cb.zoneColor[ZONE_LEATHER] = Vec4(0.24f, 0.16f, 0.1f, 1);
+        cb.zoneColor[ZONE_METAL] = Vec4(0.8f, 0.8f, 0.83f, 1);
+        cb.zoneColor[ZONE_HAIR] = c.hairColor;
+        cb.zoneColor[ZONE_SKIN] = c.skinTone;
+        cb.zoneColor[ZONE_EYE] = Vec4(0.93f, 0.93f, 0.92f, 1);
+        cb.zoneColor[ZONE_DARK] = Vec4(0.04f, 0.04f, 0.05f, 1);
+        cb.zoneColor[ZONE_LIPS] = Vec4(c.skinTone.x * 0.82f, c.skinTone.y * 0.52f, c.skinTone.z * 0.5f, 1);
+        cb.zoneColor[ZONE_LENS] = Vec4(0.06f, 0.16f, 0.22f, 1);
+        cb.zoneMat[ZONE_MAIN] = Vec4(kr, km, 0, 0);
+        cb.zoneMat[ZONE_ACCENT] = Vec4(kr, km, 0, 0);
+
         int skin = skinSrv_.empty() ? 0 : ((c.skin % (int)skinSrv_.size()) + (int)skinSrv_.size()) % (int)skinSrv_.size();
         ID3D11ShaderResourceView* srv = skinSrv_[skin];
         if (!shadowPass) ctx_->PSSetShaderResources(1, 1, &srv);
+
+        bool hairShows = c.hair >= 0 && c.hair < 4 && (c.hat <= 0 || c.hair == 1 || c.hair == 3);  // spikes/mohawk hide under hats
+        bool wearsMask = (c.kit >> (int)KitPiece::Mask) & 1u;
+        const int hairKind = atlas ? KIND_ATLAS : KIND_PAINTED;   // old models: solid hair painted from the skin
+        // Solid parts first, then the hair cards (alpha-tested in the shadow map).
+        auto pass = [&](bool outlinePass) {
+            upload(KIND_BODY);
+            drawMesh(charModel_->bodyMesh(c.build, lod));
+            if (!close) return;
+            upload(KIND_PAINTED);
+            if (c.hat > 0 && c.hat < 4) drawMesh(charModel_->hat[c.hat]);
+            if (c.headband && !outlinePass) drawMesh(charModel_->headband);
+            if (atlas) {
+                upload(KIND_ATLAS);
+                for (int k = 0; k < (int)KitPiece::Count; ++k)
+                    if ((c.kit >> k) & 1u) drawMesh(charModel_->kitMesh(k, c.build));
+                if (faceParts && !outlinePass && !shadowPass) {
+                    drawMesh(charModel_->face);
+                    if (!wearsMask) drawMesh(charModel_->mouth);
+                }
+            }
+            if (hairShows && !outlinePass) {
+                upload(hairKind);
+                if (shadowPass && atlas) {
+                    ctx_->VSSetShader(vsSkinShadowUV_, nullptr, 0);
+                    ctx_->PSSetShader(psCharShadowClip_, nullptr, 0);
+                    drawMesh(charModel_->hair[c.hair]);
+                    ctx_->VSSetShader(vsSkinShadow_, nullptr, 0);
+                    ctx_->PSSetShader(nullptr, nullptr, 0);
+                } else {
+                    drawMesh(charModel_->hair[c.hair]);
+                }
+            }
+        };
         ctx_->VSSetShader(shadowPass ? vsSkinShadow_ : vsSkin_, nullptr, 0);
         ctx_->PSSetShader(shadowPass ? nullptr : psChar_, nullptr, 0);
         ctx_->RSSetState(shadowPass ? rsShadow_ : rsSolid_);
-        drawMesh(charModel_->bodyLod[lod]);
-        bool hairShows = c.hair >= 0 && c.hair < 4 && (c.hat <= 0 || c.hair == 1 || c.hair == 3);  // spikes/mohawk hide under hats
-        if (lod < 2 && hairShows) drawMesh(charModel_->hair[c.hair]);
-        if (lod < 2 && c.hat > 0 && c.hat < 4) drawMesh(charModel_->hat[c.hat]);
-        if (lod < 2 && c.headband) drawMesh(charModel_->headband);
+        pass(false);
         if (!shadowPass && outline > 0.0f && gfx_.get(GfxOption::SmoothShading) > 0) {
             ctx_->VSSetShader(vsSkinOutline_, nullptr, 0);
             ctx_->PSSetShader(psOutline_, nullptr, 0);
             ctx_->RSSetState(rsCullFront_);
-            drawMesh(charModel_->bodyLod[lod]);
-            if (lod < 2 && hairShows) drawMesh(charModel_->hair[c.hair]);
-            if (lod < 2 && c.hat > 0 && c.hat < 4) drawMesh(charModel_->hat[c.hat]);
+            pass(true);
             ctx_->RSSetState(rsSolid_);
         }
     }
     if (!shadowPass) {
-        ID3D11ShaderResourceView* none = nullptr;
-        ctx_->PSSetShaderResources(1, 1, &none);
+        ID3D11ShaderResourceView* none[1] = {nullptr};
+        ctx_->PSSetShaderResources(1, 1, none);
+    }
+    if (atlas) {
+        ID3D11ShaderResourceView* none[2] = {nullptr, nullptr};
+        ctx_->PSSetShaderResources(4, 2, none);
     }
     // Back to the instanced scene state.
     ctx_->IASetInputLayout(layoutScene_);
@@ -1883,11 +2108,15 @@ void RendererD3D11::shutdown() {
     for (Mesh& m : charMeshes_) releaseMesh(m);
     charMeshes_.clear();
     for (ID3D11ShaderResourceView*& v : skinSrv_) safeRelease(v);
+    safeRelease(charNormalSrv_);
+    safeRelease(charMaterialSrv_);
     for (ID3D11Texture2D*& t : skinTex_) safeRelease(t);
     skinSrv_.clear();
     skinTex_.clear();
     safeRelease(vsSkin_);
     safeRelease(vsSkinShadow_);
+    safeRelease(vsSkinShadowUV_);
+    safeRelease(psCharShadowClip_);
     safeRelease(vsSkinOutline_);
     safeRelease(psChar_);
     safeRelease(psOutline_);

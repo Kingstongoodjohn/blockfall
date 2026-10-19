@@ -35,6 +35,7 @@ struct Settings {
     float sensitivity = 0.0022f;  // radians per mouse count
     bool vsync = true;
     float volume = 0.8f;          // sound effects, 0 (muted) .. 1
+    int characterStyle = 0;       // 0 stylized (cartoon steps + outline), 1 realistic (PBR materials)
     Bindings binds = Bindings::defaults();
     std::vector<std::string> friends;
     int kbucks = 0;

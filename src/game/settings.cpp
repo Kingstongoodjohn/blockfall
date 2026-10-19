@@ -112,6 +112,7 @@ std::string Settings::serialize() const {
     o << "sensitivity=" << sensitivity << "\n";
     o << "vsync=" << (vsync ? 1 : 0) << "\n";
     o << "volume=" << volume << "\n";
+    o << "charstyle=" << characterStyle << "\n";
     o << "kbucks=" << kbucks << "\n";
     o << "skins=" << ownedSkins << "\n";
     o << "skin=" << equippedSkin << "\n";
@@ -146,6 +147,8 @@ void Settings::parse(const std::string& text) {
         } else if (k == "volume") {
             float vol = (float)std::atof(v.c_str());
             if (vol >= 0.0f && vol <= 1.0f) volume = vol;
+        } else if (k == "charstyle") {
+            characterStyle = v == "1" ? 1 : 0;
         } else if (k.compare(0, 5, "bind.") == 0 || k.compare(0, 6, "bind2.") == 0) {
             int slot = k[4] == '2' ? 1 : 0;
             std::string which = k.substr(slot ? 6 : 5);

@@ -12,6 +12,8 @@ set(GAME_SOURCES
     src/game/ai.cpp
     src/game/atlas.cpp
     src/game/building.cpp
+    src/game/charface.cpp
+    src/game/charphys.cpp
     src/game/editing.cpp
     src/game/frontend.cpp
     src/game/game.cpp

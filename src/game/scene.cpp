@@ -1,6 +1,8 @@
 // Blockfall - turns game state into a list of mesh instances for the renderer
 #include "scene.h"
 #include "charanim.h"
+#include "charface.h"
+#include "charphys.h"
 #include "model.h"
 #include "skins.h"
 #include <cmath>
@@ -144,11 +146,43 @@ void addPickaxeModel(SceneList& s, const Mat4& root) {
     s.opaque[MESH_SPHERE].push_back(inst(Mat4::scale(Vec3(0.1f, 0.75f, 0.13f)) * Mat4::translation(Vec3(0, -0.06f, 0.78f)) * root, STEEL, 0, MAT_METAL));
 }
 
+// What a character's face does, from what it is doing.
+Expression figureExpression(const FigurePose& f) {
+    if (f.knocked) return Expression::Pain;
+    if (f.hurt > 0.05f) return Expression::Hurt;
+    if (f.lobby) return Expression::Happy;
+    switch (f.anim) {
+        case Anim::Aim: case Anim::Shoot: case Anim::Reload: return Expression::Focused;
+        case Anim::Sprint: case Anim::Build: return Expression::Effort;
+        case Anim::Pickaxe: return f.swing >= 0 ? Expression::Effort : Expression::Neutral;
+        default: return Expression::Neutral;
+    }
+}
+
+constexpr float FACE_DETAIL_DIST = 30.0f;   // beyond this the face and swinging parts stay still
+
+// Face and swing state of one animated character (kept between frames, like CharAnimState).
+struct FigureExtras {
+    SwingState swing;
+    FaceState face;
+    float lastClock = 0;
+    bool init = false;
+};
+
 // The rigged, textured character from assets/character.glb. Returns false if it isn't loaded.
 bool addSkinnedFigure(SceneList& s, const FigurePose& f) {
     const CharacterModel* m = characterModel();
     if (!m || !m->loaded) return false;
     static std::unordered_map<int, CharAnimState> states;
+    static std::unordered_map<int, FigureExtras> extras;
+    static const CharacterModel* rigsFor = nullptr;
+    static SwingRig swingRig;
+    static FaceRig faceRig;
+    if (rigsFor != m) {   // find the face and swing bones once per model
+        swingRig.build(*m);
+        faceRig.build(*m);
+        rigsFor = m;
+    }
     CharAnimState& st = states[f.animKey];
 
     CharAnimInput in;
@@ -168,11 +202,35 @@ bool addSkinnedFigure(SceneList& s, const FigurePose& f) {
     Pose pose;
     if (!evalCharacterPose(*m, st, in, pose)) return false;
 
-    Mat4 world[MAX_BONES];
-    m->boneWorld(pose, world);
     // Knocked: crouch pose tipped forward onto hands and knees.
     Mat4 root = f.knocked ? Mat4::translation(Vec3(0, -0.05f, 0.25f)) * Mat4::rotationX(0.85f) * Mat4::rotationY(f.yaw) * Mat4::translation(f.feet)
                           : Mat4::rotationY(f.yaw) * Mat4::translation(f.feet);
+    const Skin& outfit = skinAt(f.skin);
+
+    // Face and secondary motion, only close to the camera (nobody sees a blink 80 m away).
+    bool detail = f.eyeDistance < FACE_DETAIL_DIST;
+    FigureExtras& ex = extras[f.animKey];
+    float dt = ex.init ? clampf(f.clock - ex.lastClock, 0.0f, 0.1f) : 0.0f;
+    ex.lastClock = f.clock;
+    ex.init = true;
+    if (detail) {
+        if (!ex.face.init) ex.face.seed = 977u * (unsigned)(f.animKey + 1000);
+        applyFace(*m, faceRig, ex.face, figureExpression(f), dt, pose);
+        bool hairSwings = outfit.hairStyle == 3 && outfit.hatStyle == 0;
+        unsigned active = 0;
+        for (int c = 0; c < swingRig.count; ++c) {
+            const std::string& first = m->bones[swingRig.chains[c].bones[0]].name;
+            bool on = (first.compare(0, 8, "HairTail") == 0 && hairSwings) || (first.compare(0, 4, "Cape") == 0 && outfit.wears(KitPiece::Cape)) ||
+                      (first.compare(0, 5, "Scarf") == 0 && outfit.wears(KitPiece::Scarf));
+            if (on) active |= 1u << c;
+        }
+        if (active) applySwing(*m, swingRig, ex.swing, root, dt, active, pose);
+    } else {
+        ex.swing.init = false;
+    }
+
+    Mat4 world[MAX_BONES];
+    m->boneWorld(pose, world);
 
     CharacterDraw d;
     d.world = root;
@@ -180,10 +238,18 @@ bool addSkinnedFigure(SceneList& s, const FigurePose& f) {
     d.accent = Vec4(0.3f, 0.9f, 1.0f, 1);
     d.params = Vec4(0, f.hurt, f.teamTint ? 1.0f : 0.0f, 0);
     d.skin = f.skin;
-    const Skin& outfit = skinAt(f.skin);
     d.hair = outfit.hairStyle;
     d.hat = outfit.hatStyle;
     d.headband = outfit.headband || f.teamTint;
+    d.build = outfit.build;
+    d.kit = outfit.kit;
+    d.kitMaterial = outfit.kitMaterial;
+    d.face = detail;
+    d.main = outfit.shirt;
+    d.second = outfit.pants;
+    d.trim = outfit.accent;
+    d.hairColor = outfit.hair;
+    d.skinTone = skinToneColor(outfit.skinTone);
     d.distance = f.eyeDistance;
     d.boneOffset = (int)s.boneMats.size();
     d.boneCount = (int)m->bones.size();

@@ -752,7 +752,16 @@ void FrontEnd::graphicsTab(float px, float py, float pw, float ph) {
         settings.volume = std::min(1.0f, std::round(settings.volume * 10.0f + 1.0f) / 10.0f);
         save();
     }
-    hud_->text(x, y + 60 * u, 1.3f * u, DIM, "THESE ARE THIS GAME'S OWN VERSIONS OF THE UE5 EFFECTS, BUILT ON DIRECT3D 11.");
+    // Character style, on the same row.
+    float cx = vbx + 150 * u;
+    hud_->text(cx, y + 12 * u, 1.8f * u, WHITE, "CHARACTERS");
+    float cbx = cx + hud_->textWidth("CHARACTERS", 1.8f * u) + 20 * u;
+    if (button(settings.characterStyle ? "REALISTIC" : "STYLIZED", cbx, y, 170 * u, 44 * u)) {
+        settings.characterStyle = 1 - settings.characterStyle;
+        save();
+    }
+    hud_->text(x, y + 60 * u, 1.3f * u, DIM, "THESE ARE THIS GAME'S OWN VERSIONS OF THE UE5 EFFECTS, BUILT ON DIRECT3D 11. "
+                                             "REALISTIC CHARACTERS: SHINY METAL, MATTE CLOTH, SOFT SKIN.");
 }
 
 void FrontEnd::pauseScreen() {
