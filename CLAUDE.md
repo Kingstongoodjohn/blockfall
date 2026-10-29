@@ -12,9 +12,11 @@ The player-facing feature list and controls live in `README.md`.
 
 **Status:** v14: outfit kit (14 pieces, 3 body builds), hair cards, face rig with expressions,
 swinging hair/capes/scarves, shared 4096 detail atlas, Stylized/Realistic character style (on
-top of v13: sound, bot pathfinding, wall edit rules). `bin/Blockfall.exe` is still the v12 build
-(not rebuilt; that needs a release request).
-**Last updated:** 2026-10-18
+top of v13: sound, bot pathfinding, wall edit rules). `bin/Blockfall.exe` is a v14 build
+(MinGW, 2026-10-29) that includes the friends fix below. Adding a friend takes any name again
+(accounts are per PC, so a "real account" check could never pass for a friend on another PC).
+`--mute` skips sound (for headless test machines; XAudio2 hangs under Wine).
+**Last updated:** 2026-10-29
 
 ## Stack
 - **C++17**, built with **CMake ≥ 3.16** and **MSVC** (Visual Studio 2022 Build Tools on this PC).

@@ -77,8 +77,6 @@ If Windows shows "Windows protected your PC", click **More info**, then **Run an
 - **Longer matches.** The storm takes about 12 minutes to close instead of 7, bots hit each
   other softer and don't go looking for each other across the map in the first minute, so a
   100-player lobby still has 80+ alive after a minute and a half and ends with a real final circle.
-- **Friends must be real.** You can only add a friend by the name of a real player account on
-  this PC (one made on the sign-in screen).
 - **No enemy health bars.** You only see your damage numbers; teammates still show theirs.
 - **Flat edit tiles.** The selection tiles on cones and ramps are flat 2D tiles on the surface.
 

@@ -369,6 +369,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
         size_t until = args.find("--until");
         if (until != std::string::npos) demo.stopAt = std::atoi(args.c_str() + until + 7);
     }
+    const bool mute = args.find("--mute") != std::string::npos;   // skip sound entirely (headless test machines)
 
     App app;
     g_app = &app;
@@ -454,8 +455,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
     Audio audio;
     {
         std::string aerr;
-        bool ok = audio.init(aerr);
-        if (demo.log) std::fprintf(demo.log, "audio: %s\n", ok ? "XAudio2 ready" : aerr.c_str());
+        bool ok = !mute && audio.init(aerr);
+        if (demo.log) std::fprintf(demo.log, "audio: %s\n", mute ? "muted (--mute)" : (ok ? "XAudio2 ready" : aerr.c_str()));
     }
 
     FrontEnd fe;

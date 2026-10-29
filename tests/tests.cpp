@@ -1121,19 +1121,8 @@ static void testFrontEnd() {
     fe.frame(lost, DT, 1600, 900, 60, scene, hud);
     CHECK(fe.screen == Screen::Paused, "alt-tab pauses");
 
-    // Friends screen: type a name and press Enter to add. Only real accounts can be added.
+    // Friends screen: type a name and press Enter to add.
     fe.screen = Screen::Friends;
-    {
-        Account pal; std::string err;
-        CHECK(fe.accounts.create("PIXEL_PAL", "secret1", pal, err), "friend's account exists (%s)", err.c_str());
-        fe.frame(click(550, 285), DT, 1600, 900, 60, scene, hud);
-        RawInput t2; t2.text = "nobody_real";
-        fe.frame(t2, DT, 1600, 900, 60, scene, hud);
-        RawInput e2; e2.down[KEY_ENTER] = e2.pressed[KEY_ENTER] = true;
-        fe.frame(e2, DT, 1600, 900, 60, scene, hud);
-        CHECK(!fe.settings.hasFriend("NOBODY_REAL"), "a name with no account is not added as a friend");
-        fe.friendInputForTests().clear();
-    }
     fe.frame(click(550, 285), DT, 1600, 900, 60, scene, hud);  // focus the ADD A FRIEND field
     RawInput typed;
     typed.text = "pixel_pal";
