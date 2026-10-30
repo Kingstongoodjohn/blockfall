@@ -124,7 +124,30 @@ bool evalCharacterPose(const CharacterModel& m, CharAnimState& st, const CharAni
     st.lastClock = in.clock;
     st.freeT += dt;
 
-    Choice lo = pickLower(m, in, st.freeT);
+    // Which way the legs face. Only while walking on the ground; strafing turns the legs toward the
+    // movement, backing up turns them toward the opposite way and plays the cycle backwards.
+    {
+        bool legsMove = !in.lobby && in.moveAmount > 0.12f &&
+                        (in.anim == Anim::Walk || in.anim == Anim::Sprint || in.anim == Anim::Crouch || in.anim == Anim::Aim ||
+                         in.anim == Anim::Shoot || in.anim == Anim::Reload || in.anim == Anim::Pickaxe || in.anim == Anim::Build ||
+                         in.anim == Anim::Idle);
+        float target = 0.0f;
+        if (legsMove) {
+            float a = std::atan2(std::sin(in.moveAngle), std::cos(in.moveAngle));   // -pi..pi
+            float back = std::fabs(a);
+            if (!st.backward && back > 1.83f) st.backward = true;        // past ~105 degrees
+            else if (st.backward && back < 1.66f) st.backward = false;   // under ~95 degrees
+            if (st.backward) a = std::atan2(std::sin(a - PI), std::cos(a - PI));
+            target = clampf(a, -LEG_YAW_MAX, LEG_YAW_MAX);
+        } else {
+            st.backward = false;
+        }
+        float k = std::min(1.0f, dt * LEG_YAW_SPEED);
+        st.legYaw += (target - st.legYaw) * (st.init ? k : 1.0f);
+    }
+    CharAnimInput inDir = in;
+    if (st.backward) inDir.walkPhase = -in.walkPhase;   // step cycle in reverse
+    Choice lo = pickLower(m, inDir, st.freeT);
     Choice up = pickUpper(m, in, st.freeT);
 
     if (!st.init) {
@@ -188,6 +211,14 @@ bool evalCharacterPose(const CharacterModel& m, CharAnimState& st, const CharAni
         } else {
             layer(st.upper, st.upperT, st.upperLoop, 1.0f);
         }
+    }
+    // Legs turned toward the movement: the caller turns the whole body by legYaw, so turn the spine
+    // back by the same amount to keep the chest, arms and gun on the aim.
+    if (std::fabs(st.legYaw) > 1e-3f) {
+        int spine = m.boneIndex("Spine");
+        Mat4 world[MAX_BONES];
+        m.boneWorld(base, world);
+        m.rotateBoneInModel(spine, quatFromMat(Mat4::rotationY(-st.legYaw)), world, base);
     }
     // Aim pitch: lean the chest and head so the gun follows the crosshair.
     bool aiming = in.gun && in.anim != Anim::Sprint && in.anim != Anim::Jump && !in.lobby;

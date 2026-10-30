@@ -9,7 +9,52 @@ You start in a lobby. Pick **Solo, Duos, Trios or Squads**, invite friends to yo
 Double-click `bin\Blockfall.exe`. It needs Windows 10 or 11 and a GPU that supports Direct3D 11 (almost all of them do).
 Keep the `assets` folder next to `bin` - that's where the character model and skin textures live.
 
-If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. The game isn't signed with a paid certificate, which is why Windows warns about it.
+### If Windows says it's a virus or blocks it
+
+It's a false alarm: the game isn't signed with a paid code-signing certificate, and Windows treats
+any new unsigned download as risky until enough people have run it.
+
+- **Blue box "Windows protected your PC"** (SmartScreen): click **More info**, then **Run anyway**.
+- **Windows Security says it found a threat** (Defender): open **Windows Security → Virus & threat
+  protection → Protection history**, pick the Blockfall entry, choose **Allow on device**. Then
+  send `bin\Blockfall.exe` to Microsoft as a false positive at
+  <https://www.microsoft.com/wdsi/filesubmission> (choose "Home customer", "Incorrectly detected
+  as malware"). Microsoft usually clears it in a few days, and then Defender stops flagging it for
+  everyone.
+- **"Smart App Control blocked part of this app"** (Windows 11): Smart App Control blocks every
+  unsigned app and has no "run anyway". It can be turned off in **Windows Security → App & browser
+  control → Smart App Control**, but Windows won't let you turn it back on without a reinstall, so
+  that's your call.
+
+The exe carries its name, version, publisher and an app manifest, which keeps the guessing
+checks calmer. Only signing the exe with a code-signing certificate removes these warnings for good.
+
+## What's new in v15 - animations that touch the ground, tailored outfits, occlusion culling
+
+- **Feet stay on the ground.** Every standing and moving animation now uses leg IK: the game
+  works out the hip and knee bends that put each foot exactly on the ground. Before, feet sank up
+  to 26 cm into the ground when crouching and 13 cm when running, and slid while sprinting.
+- **Real running.** Jog and sprint are built from a step cycle: the planted foot stays still on
+  the ground while the body passes over it, the heel peels up, the other leg swings through and
+  the hips bob. Sprinting leans forward with long strides and a big arm drive. Each gait's stride
+  length matches its speed (`STRIDE_WALK`, `STRIDE_SPRINT`, `STRIDE_CROUCH` in `game.h`), so feet
+  don't skate.
+- **Strafing and backing up.** The legs turn toward where you're actually going (up to 60
+  degrees) while your chest, arms and gun stay on the crosshair. Walking backward plays the step
+  cycle in reverse. No more forward-running legs sliding sideways.
+- **Crouch, idle and heal** stand properly: weight shifts and breathing in idle, one heel up in the
+  crouch, feet planted while healing.
+- **Tailored outfits.** Every skin's clothes were repainted like real gear: a fitted top with a
+  front panel and zip, darker side panels, piping, ribbed collar and cuffs, an arm band and
+  sleeve stripes; trousers with side stripes, knee pads and thigh straps with buckles; a leather
+  belt with a buckle and pouches; padded gloves; tall laced leather boots with toe caps and
+  treaded soles; creases at the elbows, knees, waist and ankles.
+- **Occlusion culling.** Each frame the ground, house walls and floors and your builds are drawn
+  into a small depth picture on the CPU, and anything outside the view or fully hidden behind
+  them isn't drawn (it still casts its shadow). From a typical spot that skips most of the map:
+  in the test scene 5,547 objects become about 840.
+- **Fewer virus warnings.** The exe now has its name, version, publisher, an icon and an app
+  manifest. See "If Windows says it's a virus" above for the rest.
 
 ## What's new in v14 - outfits, real hair, faces that move
 
@@ -479,10 +524,13 @@ tests/          logic tests
   floating), not its exact list of allowed shapes.
 - Skins are combinations of 3 builds and 14 shared outfit pieces, not 64 individually sculpted
   models, and the "sculpting" is done by code, not by an artist. Animations are scripted
-  keyframes, not motion capture. Outfit pieces can clip through each other in extreme poses.
+  keyframes with leg IK, not motion capture; feet are planted for flat ground, so on slopes and
+  stairs one foot can float a little. Outfit pieces can clip through each other in extreme poses.
 - Bots only plan paths along the ground, and only once they're stuck. They don't plan routes up
   ramps or across upper floors, so tall builds can still trip them up.
 - Friends are local to your PC (AI teammates with their names), not real online players.
+- Occlusion culling only uses the ground, house walls/floors and unedited build walls/floors as
+  blockers. Trees, rocks and edited builds never hide anything.
 - The graphics effects are this game's own small versions, not UE5's. There's no real global illumination, just screen-space AO and bounce.
 - Sound effects are simple synthesised ones. There's no music, no voice and no looping sounds
   (wind, the bus engine).

@@ -1444,12 +1444,13 @@ void RendererD3D11::uploadInstances(const SceneList& scene) {
     int detail = gfx_.get(GfxOption::MeshDetail);
     instanceScratch_.clear();
     ranges_.clear();
-    for (int pass = 0; pass < 2; ++pass)
+    // pass 0 opaque, 1 see-through, 2 hidden by occlusion culling (drawn into the shadow map only).
+    for (int pass = 0; pass < 3; ++pass)
         for (int m = 0; m < MESH_COUNT; ++m) {
-            const std::vector<Instance>& list = pass == 0 ? scene.opaque[m] : scene.transparent[m];
+            const std::vector<Instance>& list = pass == 0 ? scene.opaque[m] : (pass == 1 ? scene.transparent[m] : scene.shadowOnly[m]);
             if (list.empty()) continue;
             if (!meshHasLods(m)) {
-                ranges_.push_back({m, 0, (UINT)instanceScratch_.size(), (UINT)list.size(), pass == 1});
+                ranges_.push_back({m, 0, (UINT)instanceScratch_.size(), (UINT)list.size(), pass == 1, pass == 2});
                 instanceScratch_.insert(instanceScratch_.end(), list.begin(), list.end());
                 continue;
             }
@@ -1465,7 +1466,7 @@ void RendererD3D11::uploadInstances(const SceneList& scene) {
                     if (want == lod) instanceScratch_.push_back(in);
                 }
                 UINT count = (UINT)instanceScratch_.size() - first;
-                if (count) ranges_.push_back({m, lod, first, count, pass == 1});
+                if (count) ranges_.push_back({m, lod, first, count, pass == 1, pass == 2});
             }
         }
     ensureInstanceCapacity(instanceScratch_.size());
@@ -1488,6 +1489,7 @@ void RendererD3D11::drawScene(const SceneList& scene, bool shadowPass) {
         }
         for (const DrawRange& r : ranges_) {
             if (r.transparent != (pass == 1)) continue;
+            if (r.shadowOnly && !shadowPass) continue;
             if (r.mesh == MESH_TERRAIN && !scene.drawTerrain) continue;
             const Mesh& mesh = meshes_[r.mesh][r.lod];
             if (!mesh.vb) continue;
@@ -1696,6 +1698,7 @@ void RendererD3D11::drawCharacters(const SceneList& scene, bool shadowPass) {
     };
     for (const CharacterDraw& c : scene.characters) {
         if (c.boneCount <= 0 || c.boneOffset + c.boneCount > (int)scene.boneMats.size()) continue;
+        if (c.shadowOnly && !shadowPass) continue;   // hidden behind something (occlusion culling)
         if (SUCCEEDED(ctx_->Map(cbBones_, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
             std::memcpy(ms.pData, &scene.boneMats[c.boneOffset], sizeof(Mat4) * std::min(c.boneCount, MAX_BONES));
             ctx_->Unmap(cbBones_, 0);

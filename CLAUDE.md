@@ -10,13 +10,12 @@ are local accounts that play as AI teammates. There is no online server.
 
 The player-facing feature list and controls live in `README.md`.
 
-**Status:** v14: outfit kit (14 pieces, 3 body builds), hair cards, face rig with expressions,
-swinging hair/capes/scarves, shared 4096 detail atlas, Stylized/Realistic character style (on
-top of v13: sound, bot pathfinding, wall edit rules). `bin/Blockfall.exe` is a v14 build
-(MinGW, 2026-10-29) that includes the friends fix below. Adding a friend takes any name again
-(accounts are per PC, so a "real account" check could never pass for a friend on another PC).
+**Status:** v15: leg-IK animations (planted feet, step-cycle jog/sprint/crouch-walk, strafing and
+backing up with turned legs), tailored outfit painting on all 64 skins, CPU occlusion culling,
+exe version info/icon/manifest. On top of v14 (outfit kit, hair cards, faces, Stylized/Realistic)
+and v13 (sound, bot pathfinding, wall edit rules). `bin/Blockfall.exe` is a v15 build (MinGW).
 `--mute` skips sound (for headless test machines; XAudio2 hangs under Wine).
-**Last updated:** 2026-10-29
+**Last updated:** 2026-10-30
 
 ## Stack
 - **C++17**, built with **CMake ≥ 3.16** and **MSVC** (Visual Studio 2022 Build Tools on this PC).
@@ -55,7 +54,9 @@ menu), or call it directly:
   Without `--out` it overwrites `assets/` (ask first, binary assets). `--paint` also repaints
   the 64 skin PNGs (100 MB; only when skin colours change). `--preview DIR` renders outfit
   check pictures. Afterwards `tools/character/glb_compare.py old.glb new.glb` confirms the
-  body's UVs (and so the painted skins) still match.
+  body's UVs (and so the painted skins) still match, and `tools/character/anim_check.py -- file.glb`
+  (Blender/bpy) measures every clip on the skinned mesh: how far the soles sink/float and how much
+  a planted foot slides. Ground clips should read sole ~+0.01 m and slide error < 0.01 m/frame.
 
 ## Project structure
 ```
@@ -63,8 +64,9 @@ src/core/        math (vectors, matrices, ray tests), RNG
 src/game/        ALL game rules, no Windows code (built as the blockfall_core library)
                    nav.*  bot pathfinding (A*)    sfx.*  sound events + sound synthesis
                    charphys.*  swing chains       charface.*  expressions + blinking
+                   occlusion.*  CPU depth picture + frustum/occlusion culling of SceneList
 src/platform/    Win32 window, input, Direct3D 11 renderer + shaders, XAudio2 sound
-                 (audio_xaudio2.*), scripted --shots demo
+                 (audio_xaudio2.*), scripted --shots demo; res/ = icon, version info, manifest (.rc)
 src/third_party/ cgltf.h, stb_image.h (vendored, do not edit)
 tests/tests.cpp  logic tests for blockfall_core
 tools/character/ Blender scripts: build_character (main), builds, kit (outfit pieces),
@@ -103,6 +105,19 @@ docs/decisions/  ADRs (NNNN-short-title.md)
 - **Atlas zones:** the material map's alpha is a zone (meshutil.py `Z_*`, renderer `ZONE_*`;
   keep both lists in step). Body texels use the painted skin texture; everything else is
   coloured from the per-character palette in `CharacterDraw`. See ADR 0003.
+- **Animation:** clips are keyframed in `build_character.py`. Legs use `leg_ik` (two-bone IK to an
+  ankle target) and `gait_foot`/`gait_hips` (a step cycle: heel strike at phase 0 for the left
+  foot, 0.5 for the right, matching the footstep sounds). The game advances `walkPhase` by
+  `STRIDE_WALK/SPRINT/CROUCH` radians per metre (`game.h`); the clips' `CYCLE_*` must equal
+  2*pi / those rates or feet slide. `charanim.cpp` turns the legs toward the movement
+  (`CharAnimState::legYaw`, up to `LEG_YAW_MAX`), plays the cycle backwards when backing up, and
+  turns the spine back so the chest stays on the aim; `scene.cpp` adds `legYaw` to the root.
+- **Occlusion culling:** `buildScene` ends by drawing occluders (coarse sunk ground, house
+  walls/floors, unedited build walls/floors older than 0.6 s, not the piece being edited) into a
+  256x144 depth picture and moving hidden instances to `SceneList::shadowOnly` (drawn only in the
+  shadow pass); hidden characters get `CharacterDraw::shadowOnly`. Must stay conservative: a test
+  checks every point it hides is blocked by a world raycast. `setOcclusionCulling(false)` turns it
+  off. See ADR 0004.
 - **Rarity:** Common → Legendary; each step adds +5% damage.
 - **Knocked:** in team modes, zero HP with a teammate standing means crawling and bleeding out
   over 40 s; a teammate revives you by holding E for 5 s.
@@ -135,7 +150,9 @@ docs/decisions/  ADRs (NNNN-short-title.md)
 - Never edit files in `src/third_party/`.
 - Ask before adding or regenerating large binary assets (textures, `.glb`, screenshots). They live
   in git history forever.
-- Ask before changing `CMakeLists.txt` or `build.bat`.
+- Ask before changing `CMakeLists.txt` or `build.bat`. (2026-10-30: `occlusion.cpp` and
+  `res/blockfall.rc` were added to it, with `/MANIFEST:NO` for MSVC, as part of the requested
+  occlusion-culling and antivirus-warning work.)
 
 ## Gotchas
 - **README "What's new in vN" sections are history.** They describe each version as it shipped,
@@ -159,6 +176,9 @@ docs/decisions/  ADRs (NNNN-short-title.md)
   They're real (not vendored) and haven't been fixed yet.
 - **Tests that check `Game::sounds`** should clear it first: nothing drains it in tests, and it
   stops growing at `MAX_SOUND_EVENTS`.
+- **Rebuilding the character on Linux bpy changes the kit atlas UVs** (smart UV packing differs
+  from Windows Blender), so a rebuild must re-bake the atlas maps too (don't use `--no-bake` for a
+  real asset update). The body UVs, and so the painted skins, stay identical.
 - **The `--shots` screenshots are only 1280x720.** Faces are ~15 px in normal shots; use the
   `07h_closeup_face_realistic` shot (subject right in front of the camera) to judge faces.
 - **Swing-chain tests need odd rest rotations** (`tinyRig` in tests.cpp): with identity rest
@@ -185,5 +205,8 @@ docs/decisions/  ADRs (NNNN-short-title.md)
   listened to them yet. Tune recipes in `synthSfx` if they sound off.
 - Small known issue: the Post-processing hint in Settings (`gfxOptionHint`) still mentions depth of
   field when aiming, but depth of field is off in matches.
-- Next: _decide with the user._ Candidates: fix the `fopen` warnings, rebuild `bin/Blockfall.exe`
-  as a v13 release (needs the user's OK).
+- Antivirus: the exe is unsigned, so SmartScreen / Smart App Control / Defender heuristics can
+  still flag it. Only a code-signing certificate fixes that for good (README explains the rest).
+- Next: _decide with the user._ Candidates: party leader hosts a real multiplayer match
+  (asked for 2026-10-29; not started beyond planning), bots-only vs 100-real-players modes (asked
+  to be added later, not now), fix the `fopen` warnings, code signing.

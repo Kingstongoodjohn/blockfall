@@ -26,6 +26,13 @@ constexpr float WALK_SPEED = 4.6f;
 constexpr float SPRINT_SPEED = WALK_SPEED * 1.5f;
 constexpr float CROUCH_SPEED = 2.6f;
 constexpr float JUMP_SPEED = 7.2f;
+// Step cycle: walkPhase advances this many radians per metre moved (2*pi = one cycle = two steps).
+// The character clips are built for exactly these numbers (CYCLE_* in tools/character/
+// build_character.py), so a planted foot stays put on the ground. Change both together.
+constexpr float STRIDE_WALK = 2.4f;     // jog: a cycle every 2.6 m
+constexpr float STRIDE_SPRINT = 1.8f;   // sprint: longer strides, a cycle every 3.5 m
+constexpr float STRIDE_CROUCH = 3.4f;   // crouch walk: short steps, a cycle every 1.85 m
+constexpr float BOT_SPRINT_SPEED = 5.0f;  // bots faster than this play the sprint clip
 constexpr float CHEST_OPEN_TIME = 0.5f;
 constexpr float INTERACT_RANGE = 2.8f;
 constexpr float EDIT_RANGE = 9.0f;

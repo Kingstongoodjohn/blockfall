@@ -378,6 +378,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInst;
+    wc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(1));     // res/blockfall.rc
+    wc.hIconSm = wc.hIcon;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.lpszClassName = L"BlockfallWindow";
     RegisterClassExW(&wc);

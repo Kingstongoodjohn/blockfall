@@ -43,6 +43,7 @@ struct CharacterDraw {
     uint32_t kit = 0;       // outfit pieces worn (bit per KitPiece)
     int kitMaterial = 0;    // KitMaterial of the main pieces
     bool face = true;       // draw the 3D face parts (close up)
+    bool shadowOnly = false;  // hidden from the camera (occlusion culling): only casts its shadow
     // Palette for the outfit pieces, hair and face (the body uses its painted skin texture).
     Vec4 main, second, trim, hairColor, skinTone;
     float distance = 0;   // metres from the camera (the renderer picks the level of detail)
@@ -53,6 +54,7 @@ struct CharacterDraw {
 struct SceneList {
     std::vector<Instance> opaque[MESH_COUNT];
     std::vector<Instance> transparent[MESH_COUNT];
+    std::vector<Instance> shadowOnly[MESH_COUNT];   // culled from the view but still casting shadows
     std::vector<CharacterDraw> characters;
     std::vector<Mat4> boneMats;
     Mat4 view, proj;
@@ -64,6 +66,7 @@ struct SceneList {
         for (int i = 0; i < MESH_COUNT; ++i) {
             opaque[i].clear();
             transparent[i].clear();
+            shadowOnly[i].clear();
         }
         characters.clear();
         boneMats.clear();
@@ -78,6 +81,14 @@ struct SceneList {
 Mat4 cameraView(const Camera& c);
 Mat4 cameraProj(const Camera& c, float aspect);
 void buildScene(const Game& g, float aspect, SceneList& out);
+
+// Occlusion culling in buildScene (on by default) and what it did last frame.
+struct OcclusionStats {
+    int tested = 0, culledFrustum = 0, culledOccluded = 0, occluderTriangles = 0;
+};
+void setOcclusionCulling(bool on);
+bool occlusionCulling();
+OcclusionStats lastOcclusionStats();
 
 // Shirt colour for a team (team 0 = yours).
 Vec4 teamColor(int team, bool isPlayer);

@@ -295,7 +295,7 @@ void Game::steerBot(Bot& b, const Vec3& target, float speed, float dt) {
     world.moveBody(body, dt, others);
     checkLanding(body, b.index, dt);
     float moved = lengthXZ(body.pos - before);
-    b.walkPhase += moved * 2.4f;
+    b.walkPhase += moved * (lengthXZ(body.vel) > BOT_SPRINT_SPEED ? STRIDE_SPRINT : STRIDE_WALK);
     footstep(b.walkPhase, b.lastStep, body, speed > 5.0f ? 0.9f : 0.6f);
 
     // Stuck on something? Plan a path around it. If that fails (no route, not on the ground, too

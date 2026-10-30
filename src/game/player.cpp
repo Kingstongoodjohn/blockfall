@@ -54,7 +54,7 @@ void Game::updatePlayer(const InputState& in, float dt) {
         Vec3 before = b.pos;
         world.moveBody(b, dt, others);
         checkLanding(b, PLAYER_ACTOR_ID, dt);
-        player.walkPhase += lengthXZ(b.pos - before) * 2.4f;
+        player.walkPhase += lengthXZ(b.pos - before) * STRIDE_CROUCH;
         updateCamera();
         return;
     }
@@ -178,7 +178,7 @@ void Game::updateMovement(const InputState& in, float dt) {
     world.moveBody(b, dt, others);
     checkLanding(b, PLAYER_ACTOR_ID, dt);
     float moved = lengthXZ(b.pos - before);
-    player.walkPhase += moved * 2.4f;
+    player.walkPhase += moved * (player.crouched ? STRIDE_CROUCH : (player.sprinting ? STRIDE_SPRINT : STRIDE_WALK));
     footstep(player.walkPhase, player.lastStep, b, player.crouched ? 0.35f : (player.sprinting ? 1.0f : 0.7f));
     player.idleTime = moved > 0.001f || !b.grounded ? 0.0f : player.idleTime + dt;
 }

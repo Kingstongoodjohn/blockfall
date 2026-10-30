@@ -143,7 +143,7 @@ private:
     ID3D11Buffer* instanceBuf_ = nullptr;
     size_t instanceCap_ = 0;
     std::vector<Instance> instanceScratch_;
-    struct DrawRange { int mesh, lod; UINT first, count; bool transparent; };
+    struct DrawRange { int mesh, lod; UINT first, count; bool transparent; bool shadowOnly = false; };
     std::vector<DrawRange> ranges_;
     ID3D11Buffer* hudBuf_ = nullptr;
     size_t hudCap_ = 0;

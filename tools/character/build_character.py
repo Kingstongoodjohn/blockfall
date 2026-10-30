@@ -353,18 +353,103 @@ def hold_gun(rig, recoil=0.0, left_drop=0.0):
     rig.rot('Chest', twist=-10 * k)
 
 
-def legs_walk(rig, t, amp=32.0, knee=38.0, stride_lift=True):
-    """t in 0..1 through the cycle."""
-    a = math.sin(t * 2 * math.pi)
-    rig.rot('Thigh_L', fwd=a * amp)
-    rig.rot('Thigh_R', fwd=-a * amp)
-    # Knee bends on the leg that is swinging forward / passing under the body.
-    bl = max(0.0, math.sin((t + 0.25) * 2 * math.pi)) * knee
-    br = max(0.0, math.sin((t + 0.75) * 2 * math.pi)) * knee
-    rig.rot('Shin_L', fwd=-bl)
-    rig.rot('Shin_R', fwd=-br)
-    rig.rot('Foot_L', fwd=bl * 0.2)
-    rig.rot('Foot_R', fwd=br * 0.2)
+
+# ---- legs: two-bone IK and a gait generator, so feet stand on the ground and don't slide.
+# Leg bone lengths come from the joints (hip -> knee -> ankle).
+LEG_THIGH = (Vector(J['Knee_L'][0]) - Vector(J['Hip_L'][0])).length
+LEG_SHIN = (Vector(J['Ankle_L'][0]) - Vector(J['Knee_L'][0])).length
+LEG_REACH = (LEG_THIGH + LEG_SHIN) * 0.985     # never lock the knee completely straight
+HIP_Z = J['Hip_L'][0][2]
+ANKLE_Z = J['Ankle_L'][0][2]                   # ankle height with the foot flat on the ground
+FOOT_LEN = 0.16                                # ankle -> ball of the foot, forward
+
+# Ground distance of one full step cycle (two steps) for each gait. MUST match the stride rates in
+# src/game/game.h (STRIDE_WALK / STRIDE_SPRINT / STRIDE_CROUCH, radians of walkPhase per metre):
+# cycle = 2*pi / rate. Then a planted foot moves back at exactly the speed the body moves forward.
+CYCLE_WALK = 2 * math.pi / 2.4
+CYCLE_SPRINT = 2 * math.pi / 1.8
+CYCLE_CROUCH = 2 * math.pi / 3.4
+
+
+def leg_ik(rig, side, hips, fwd, z, out=0.0, toe=0.0):
+    """Bends the thigh and shin so the ankle lands at `fwd` metres in front of the hips' rest spot
+    and `z` metres up; keeps the foot level (plus `toe` degrees toe-down). `hips` is the (dx, dy, dz)
+    the Hips bone was moved by."""
+    dx, dy, dz = hips
+    a = fwd - dy                                # ankle forward of the hip joint
+    b = (HIP_Z + dz) - z                        # ankle below the hip joint
+    b /= max(0.5, math.cos(math.radians(out)))  # the leg is splayed out a little: it needs to be longer
+    d = min(max(math.hypot(a, b), 0.08), LEG_REACH)
+    L1, L2 = LEG_THIGH, LEG_SHIN
+    phi = math.atan2(a, b)
+    alpha = math.acos(max(-1.0, min(1.0, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d))))
+    knee = math.acos(max(-1.0, min(1.0, (L1 * L1 + L2 * L2 - d * d) / (2 * L1 * L2))))
+    theta = math.degrees(phi + alpha)
+    beta = 180.0 - math.degrees(knee)
+    rig.rot('Thigh_' + side, fwd=theta, out=out)
+    rig.rot('Shin_' + side, fwd=-beta)
+    rig.rot('Foot_' + side, fwd=theta - beta + toe)
+
+
+def gait_foot(ph, cycle, stance, lift, heel=0.07):
+    """Where one foot is at phase `ph` (0..1, heel strike at 0) of a step cycle.
+    Returns (forward, ankle height, toe-down degrees, planted)."""
+    c = cycle * stance / 2.0
+    if ph < stance:
+        u = ph / stance
+        f = c * (1.0 - 2.0 * u)
+        hl = heel * max(0.0, (u - 0.6) / 0.4) ** 2    # heel peels up at the end of the stance
+        return f, ANKLE_Z + hl, math.degrees(math.asin(min(1.0, hl / FOOT_LEN))), True
+    u = (ph - stance) / (1.0 - stance)
+    e = 0.5 - 0.5 * math.cos(math.pi * u)
+    f = -c + 2.0 * c * e
+    z = ANKLE_Z + heel * (1.0 - u) ** 2 + lift * math.sin(math.pi * u ** 0.75)
+    toe = 28.0 * (1.0 - u) ** 2 - 12.0 * u ** 3        # toe trails behind, then lifts for the heel strike
+    return f, z, toe, False
+
+
+def gait_hips(cycle, stance, lift, base_dz, dy=0.0, n=240):
+    """The hips' height over one cycle: as high as `base_dz` allows while every planted foot can
+    still reach the ground, smoothed so the body bobs instead of jerking."""
+    raw = []
+    for i in range(n):
+        t = i / n
+        lim = base_dz
+        for ph in (t, (t + 0.5) % 1.0):
+            f, z, _, planted = gait_foot(ph, cycle, stance, lift)
+            if planted:
+                a = f - dy
+                lim = min(lim, z + math.sqrt(max(0.0, LEG_REACH ** 2 - a * a)) - HIP_Z - 0.005)
+        raw.append(lim)
+    k = n // 24
+    smooth = [sum(raw[(i + j) % n] for j in range(-k, k + 1)) / (2 * k + 1) for i in range(n)]
+    return [min(sm, r + 0.015) for sm, r in zip(smooth, raw)]
+
+
+def legs_gait(rig, t, cycle, stance, lift, hips_table, dx=0.0, dy=0.0, out=4.0):
+    """Moves the hips and plants both feet for phase t. Left heel strikes at t=0, right at 0.5 (the
+    game plays a footstep sound at both)."""
+    n = len(hips_table)
+    i = t * n
+    i0 = int(i) % n
+    dz = hips_table[i0] + (hips_table[(i0 + 1) % n] - hips_table[i0]) * (i - int(i))
+    hips = (dx, dy, dz)
+    rig.move('Hips', dx=dx, dy=dy, dz=dz)
+    for side, ph in (('L', t % 1.0), ('R', (t + 0.5) % 1.0)):
+        f, z, toe, _ = gait_foot(ph, cycle, stance, lift)
+        leg_ik(rig, side, hips, f, z, out=out, toe=toe)
+    return hips
+
+
+def arms_run(rig, t, swing, base, elbow, elbow_swing, out=7.0):
+    """Arms swing opposite to the legs: right arm forward when the left heel strikes (t=0)."""
+    c = math.cos(t * 2 * math.pi)
+    rig.rot('UpperArm_R', fwd=base + swing * c, out=out)
+    rig.rot('UpperArm_L', fwd=base - swing * c, out=out)
+    rig.rot('Forearm_R', fwd=elbow + elbow_swing * max(0.0, c), out=-6)
+    rig.rot('Forearm_L', fwd=elbow + elbow_swing * max(0.0, -c), out=-6)
+    rig.rot('Hand_R', fwd=-8)
+    rig.rot('Hand_L', fwd=-8)
 
 
 def make_clip(rig, name, frames, loop, pose_fn):
@@ -406,70 +491,81 @@ def make_clip(rig, name, frames, loop, pose_fn):
 def build_animations(arm):
     rig = Rig(arm)
 
-    def idle(t):
+    def idle(t):  # relaxed stance: weight shifts slowly, chest breathes, arms hang loose
         s = math.sin(t * 2 * math.pi)
-        rig.move('Hips', dz=0.012 * s)
-        rig.rot('Chest', fwd=1.5 * s)
-        rig.rot('Head', fwd=-1.0 * s, out=2.0 * math.sin(t * 2 * math.pi + 1))
-        arms_down(rig, sway=2.0 * s)
-        rig.rot('Thigh_L', out=3)
-        rig.rot('Thigh_R', out=3)
+        c = math.cos(t * 2 * math.pi)
+        hips = (0.012 * s, 0.0, -0.025 + 0.004 * math.cos(t * 4 * math.pi))
+        rig.move('Hips', dx=hips[0], dz=hips[2])
+        leg_ik(rig, 'L', hips, 0.05, ANKLE_Z, out=5)
+        leg_ik(rig, 'R', hips, -0.04, ANKLE_Z, out=6)
+        rig.rot('Spine', fwd=2, out=-0.8 * s)
+        rig.rot('Chest', fwd=1.2 * math.sin(t * 4 * math.pi))
+        rig.rot('Head', fwd=-1.5, out=1.5 * c)
+        rig.rot('UpperArm_L', fwd=5 + 1.5 * s, out=9)
+        rig.rot('UpperArm_R', fwd=5 - 1.5 * s, out=9)
+        rig.rot('Forearm_L', fwd=16)
+        rig.rot('Forearm_R', fwd=16)
+        rig.rot('Hand_L', fwd=8, twist=-10)
+        rig.rot('Hand_R', fwd=8, twist=-10)
     make_clip(rig, 'idle', 72, True, idle)
 
+    # Jog (the normal run, 4.6 m/s): short ground contact, a little flight, arms bent.
+    WALK = (CYCLE_WALK, 0.44, 0.18)
+    walk_hips = gait_hips(*WALK, base_dz=-0.05)
+
     def walk(t):
-        legs_walk(rig, t)
-        rig.move('Hips', dz=0.025 * abs(math.sin(t * 2 * math.pi)))
-        rig.rot('Spine', fwd=4, twist=4 * math.sin(t * 2 * math.pi))
-        a = math.sin(t * 2 * math.pi)
-        rig.rot('UpperArm_L', fwd=-a * 28, out=5)
-        rig.rot('UpperArm_R', fwd=a * 28, out=5)
-        rig.rot('Forearm_L', fwd=20 + 10 * max(0, -a))
-        rig.rot('Forearm_R', fwd=20 + 10 * max(0, a))
+        legs_gait(rig, t, *WALK, walk_hips, out=3)
+        c = math.cos(t * 2 * math.pi)
+        rig.rot('Spine', fwd=7, twist=5 * c)
+        rig.rot('Chest', fwd=2, twist=3 * c)
+        rig.rot('Head', fwd=-7, twist=-6 * c)
+        arms_run(rig, t, swing=32, base=8, elbow=72, elbow_swing=14)
     make_clip(rig, 'walk', 24, True, walk)
 
+    # Sprint: leaning forward, long strides, high heel kick, big arm drive.
+    SPRINT = (CYCLE_SPRINT, 0.27, 0.34)
+    sprint_hips = gait_hips(*SPRINT, base_dz=-0.07, dy=0.04)
+
     def sprint(t):
-        legs_walk(rig, t, amp=48, knee=75)
-        rig.move('Hips', dz=0.05 * abs(math.sin(t * 2 * math.pi)) - 0.02)
-        rig.rot('Spine', fwd=22, twist=6 * math.sin(t * 2 * math.pi))
-        rig.rot('Chest', fwd=8)
-        rig.rot('Head', fwd=-18)
-        a = math.sin(t * 2 * math.pi)
-        rig.rot('UpperArm_L', fwd=-a * 55 + 10, out=8)
-        rig.rot('UpperArm_R', fwd=a * 55 + 10, out=8)
-        rig.rot('Forearm_L', fwd=85)
-        rig.rot('Forearm_R', fwd=85)
+        legs_gait(rig, t, *SPRINT, sprint_hips, dy=0.04, out=3)
+        c = math.cos(t * 2 * math.pi)
+        rig.rot('Spine', fwd=17, twist=8 * c)
+        rig.rot('Chest', fwd=6, twist=4 * c)
+        rig.rot('Head', fwd=-19, twist=-9 * c)
+        arms_run(rig, t, swing=55, base=14, elbow=88, elbow_swing=18, out=9)
     make_clip(rig, 'sprint', 16, True, sprint)
 
-    def crouch_pose():
-        rig.move('Hips', dz=-0.42, dy=-0.04)
-        rig.rot('Spine', fwd=22)
-        rig.rot('Chest', fwd=6)
-        rig.rot('Head', fwd=-22)
-        rig.rot('Thigh_L', fwd=78, out=12)
-        rig.rot('Thigh_R', fwd=78, out=12)
-        rig.rot('Shin_L', fwd=-105)
-        rig.rot('Shin_R', fwd=-105)
-        rig.rot('Foot_L', fwd=27)
-        rig.rot('Foot_R', fwd=27)
+    CROUCH_DZ = -0.40
 
-    def crouch(t):
+    def crouch_upper(t):
         s = math.sin(t * 2 * math.pi)
-        crouch_pose()
-        rig.move('Hips', dz=-0.42 + 0.008 * s, dy=-0.04)
-        arms_down(rig, bend=30)
+        rig.rot('Spine', fwd=24)
+        rig.rot('Chest', fwd=5 + 1.0 * s)
+        rig.rot('Head', fwd=-25)
+        rig.rot('UpperArm_L', fwd=24, out=10)
+        rig.rot('UpperArm_R', fwd=24, out=10)
+        rig.rot('Forearm_L', fwd=48)
+        rig.rot('Forearm_R', fwd=48)
+
+    def crouch(t):  # low and steady: one foot ahead, the back heel up
+        s = math.sin(t * 2 * math.pi)
+        hips = (0.0, -0.03, CROUCH_DZ + 0.006 * s)
+        rig.move('Hips', dy=hips[1], dz=hips[2])
+        leg_ik(rig, 'L', hips, 0.16, ANKLE_Z, out=12)
+        leg_ik(rig, 'R', hips, -0.16, ANKLE_Z + 0.06, out=10, toe=math.degrees(math.asin(0.06 / FOOT_LEN)))
+        crouch_upper(t)
     make_clip(rig, 'crouch', 48, True, crouch)
 
+    CROUCHW = (CYCLE_CROUCH, 0.58, 0.11)
+    crouch_hips = gait_hips(*CROUCHW, base_dz=CROUCH_DZ + 0.02)
+
     def crouch_walk(t):
-        crouch_pose()
-        a = math.sin(t * 2 * math.pi)
-        rig.rot('Thigh_L', fwd=78 + a * 22, out=12)
-        rig.rot('Thigh_R', fwd=78 - a * 22, out=12)
-        rig.rot('Shin_L', fwd=-105 + max(0.0, a) * 15)
-        rig.rot('Shin_R', fwd=-105 + max(0.0, -a) * 15)
-        rig.rot('UpperArm_L', fwd=-a * 12, out=6)
-        rig.rot('UpperArm_R', fwd=a * 12, out=6)
-        rig.rot('Forearm_L', fwd=35)
-        rig.rot('Forearm_R', fwd=35)
+        legs_gait(rig, t, *CROUCHW, crouch_hips, dy=-0.02, out=12)
+        crouch_upper(t)
+        c = math.cos(t * 2 * math.pi)
+        rig.rot('UpperArm_R', fwd=24 + 10 * c, out=10)
+        rig.rot('UpperArm_L', fwd=24 - 10 * c, out=10)
+        rig.rot('Spine', fwd=24, twist=4 * c)
     make_clip(rig, 'crouch_walk', 32, True, crouch_walk)
 
     def jump(t):  # legs tuck, arms up
@@ -547,17 +643,17 @@ def build_animations(arm):
     make_clip(rig, 'build', 16, True, build)
 
     def heal(t):
+        s_ = math.sin(t * 2 * math.pi)
+        hips = (0.0, -0.02, -0.12 + 0.005 * s_)
+        rig.move('Hips', dy=hips[1], dz=hips[2])
+        leg_ik(rig, 'L', hips, 0.10, ANKLE_Z, out=8)
+        leg_ik(rig, 'R', hips, -0.08, ANKLE_Z, out=8)
         rig.rot('UpperArm_L', fwd=70, out=-25)
         rig.rot('UpperArm_R', fwd=70, out=-25)
         rig.rot('Forearm_L', fwd=70)
         rig.rot('Forearm_R', fwd=70)
         rig.rot('Head', fwd=30)
         rig.rot('Spine', fwd=12)
-        rig.rot('Thigh_L', fwd=20, out=6)
-        rig.rot('Thigh_R', fwd=20, out=6)
-        rig.rot('Shin_L', fwd=-30)
-        rig.rot('Shin_R', fwd=-30)
-        rig.move('Hips', dz=-0.1)
     make_clip(rig, 'heal', 24, True, heal)
 
     def pick_idle(t):  # pickaxe held low, swaying a little
@@ -682,15 +778,20 @@ def paint_textures(body, only=None):
             col[cond] = c
             mask[cond] = m
 
-        # Skin everywhere first, then layer clothes over it.
+        # ---- the outfit is built like real clothing: a fitted long-sleeve top with a front panel,
+        # darker side panels, piping and an arm band; trousers with side stripes, a knee pad and
+        # thigh straps; leather belt with pouches; gloves; tall laced boots.
         region(np.ones(len(X), bool), tone)
-        torso = np.abs(X) < 0.3
-        region((Z < 1.05), pants * cloth[:, None][(Z < 1.05)].mean() if False else pants)            # pants
-        region((Z >= 1.05) & (Z < 1.62) & torso, shirt)                                               # shirt
-        region((Z >= 1.05) & (np.abs(X) >= 0.3) & (Z > 1.22), shirt)                                  # sleeves
-        region((Z >= 1.05) & (np.abs(X) >= 0.3) & (Z <= 1.22), tone)                                  # forearms
-        # Shirt pattern.
-        shirt_area = ((Z >= 1.05) & (Z < 1.62) & torso) | ((Z >= 1.05) & (np.abs(X) >= 0.3) & (Z > 1.22))
+        torso = np.abs(X) < 0.29
+        arm = (np.abs(X) >= 0.29) & (Z > 0.86)
+        leg = (Z < 1.0) & torso
+        out_side = N[:, 0] * np.sign(X)           # 1 on the outer side of a limb
+        leather = np.array((0.36, 0.24, 0.15)) * 0.75 + pants * 0.25
+        metal = np.array((0.72, 0.73, 0.76))
+        region(leg, pants)                                                                            # trousers
+        top = ((Z >= 1.0) & torso) | (arm & (Z >= 1.0))
+        region(top, shirt)                                                                            # top + sleeves
+        shirt_area = top
         second = shirt * 0.6 + accent * 0.4
         if pattern == 1:    # stripes
             region(shirt_area & (np.sin(Z * 55) > 0.3), second)
@@ -702,11 +803,11 @@ def paint_textures(body, only=None):
             region(shirt_area & (((np.floor(X * 14) + np.floor(Z * 14)) % 2) == 0), second)
         elif pattern == 4:  # hex plates
             hx = X * 22
-            hz = Z * 22 / 0.866
-            row = np.floor(hz)
+            hz_ = Z * 22 / 0.866
+            row = np.floor(hz_)
             cx = np.floor(hx + 0.5 * (row % 2)) - 0.5 * (row % 2) + 0.5
             cz = row + 0.5
-            dd = np.sqrt((hx - cx) ** 2 + ((hz - cz) * 0.866) ** 2)
+            dd = np.sqrt((hx - cx) ** 2 + ((hz_ - cz) * 0.866) ** 2)
             region(shirt_area & (dd > 0.42), shirt * 0.55)
         elif pattern == 5:  # stars (dots)
             sx_ = np.floor(X * 16) + 0.5
@@ -715,10 +816,10 @@ def paint_textures(body, only=None):
             region(shirt_area & (dd < 0.22), accent, 1)
         elif pattern == 6:  # flames rising from the belt
             fh = 1.08 + 0.2 * (0.5 + 0.5 * np.sin(X * 60 + Y * 25)) + 0.08 * np.sin(X * 140)
-            region(shirt_area & (Z < fh), accent, 1)
-            region(shirt_area & (Z < fh - 0.08), accent * 0.75 + np.array((0.3, 0.05, 0.0)) * 0.25, 1)
+            region(shirt_area & torso & (Z < fh), accent, 1)
+            region(shirt_area & torso & (Z < fh - 0.08), accent * 0.75 + np.array((0.3, 0.05, 0.0)) * 0.25, 1)
         elif pattern == 7:  # sash across the chest
-            region(shirt_area & (np.abs(X + (Z - 1.3) * 0.8) < 0.06) & (front > -0.3), accent, 1)
+            region(shirt_area & torso & (np.abs(X + (Z - 1.3) * 0.8) < 0.06) & (front > -0.3), accent, 1)
         elif pattern == 8:  # diagonal racing stripes
             region(shirt_area & (np.sin((X + Z) * 48) > 0.55), second)
             region(shirt_area & (np.sin((X + Z) * 48) > 0.85), accent, 1)
@@ -726,40 +827,80 @@ def paint_textures(body, only=None):
             a_ = (np.sin(X * 70) > 0.4); b_ = (np.sin(Z * 70) > 0.4)
             region(shirt_area & (a_ ^ b_), second)
             region(shirt_area & a_ & b_, shirt * 0.55)
-        elif pattern == 10:  # two-tone: one half of the shirt in the second colour
+        elif pattern == 10:  # two-tone: one half of the top in the second colour
             region(shirt_area & (X * (1 if skin_index % 2 else -1) > 0.0), second)
-            region(shirt_area & (np.abs(X) < 0.012), accent, 1)
         elif pattern == 11:  # chevrons pointing up
-            region(shirt_area & (np.sin((Z + 0.5 * np.abs(X)) * 50) > 0.4), second)
+            region(shirt_area & torso & (np.sin((Z + 0.5 * np.abs(X)) * 50) > 0.4), second)
         elif pattern == 12:  # lightning bolt down the chest
             bolt = (np.abs(X - 0.06 * np.sign(np.sin((Z - 1.1) * 20))) < 0.035) & (Z > 1.1) & (Z < 1.52) & (front > 0.4)
-            region(shirt_area & bolt, accent, 1)
-        elif pattern == 13:  # panelled jacket: darker shoulders and side panels, light centre
-            region(shirt_area & ((np.abs(X) > 0.2) | (Z > 1.5)), shirt * 0.6)
-            region(shirt_area & (np.abs(X) < 0.08) & (Z < 1.5), second)
-        region((Z < 1.0) & (np.abs(X) > 0.3), dark)                                                   # gloves
-        region((Z < 0.21), dark)                                                                      # boots
-        region((Z < 0.08), dark * 0.6)                                                                # soles
-        region((Z >= 0.98) & (Z < 1.06) & torso, dark)                                                # belt
-        region((Z >= 0.99) & (Z < 1.05) & (np.abs(X) < 0.035) & (front > 0.4), np.array((0.75, 0.75, 0.8)))  # buckle
-        # Knee pads.
+            region(shirt_area & torso & bolt, accent, 1)
+        elif pattern == 13:  # panelled jacket
+            region(shirt_area & torso & ((np.abs(X) > 0.2) | (Z > 1.5)), shirt * 0.6)
+
+        # Tailoring on the top: darker side panels, a lighter front panel that narrows to the waist
+        # (piped in the trim colour), a raised collar and ribbed cuffs.
+        chest = top & torso
+        region(chest & (np.abs(X) > 0.17) & (np.abs(front) < 0.75), col[chest & (np.abs(X) > 0.17) & (np.abs(front) < 0.75)] * 0.8)
+        pw = 0.05 + np.clip(Z - 1.08, 0, 0.5) * 0.14          # panel half-width: 5 cm at the waist
+        panel = chest & (front > 0.35) & (np.abs(X) < pw) & (Z < 1.57)
+        region(panel, np.clip(col[panel] * 0.55 + np.array((0.93, 0.93, 0.95)) * 0.45, 0, 1))
+        region(chest & (front > 0.35) & (np.abs(np.abs(X) - pw) < 0.007) & (Z < 1.57), accent, 1)  # piping
+        collar = chest & (Z >= 1.57)
+        region(collar, shirt * 0.62)
+        region(collar & (np.abs(np.sin(X * 260)) > 0.8), shirt * 0.5)                         # ribbing
+        region(chest & (np.abs(Z - 1.575) < 0.006), accent, 1)
+        region(arm & (Z >= 1.0) & (Z < 1.04), shirt * 0.58)                                     # cuffs
+        region(arm & (Z >= 1.0) & (Z < 1.04) & (np.abs(np.sin(Y * 300 + X * 300)) > 0.85), shirt * 0.45)
+        # Sleeve stripe on the outside of each arm, and an arm band on the left upper arm.
+        region(arm & (Z > 1.06) & (out_side > 0.72), accent, 1)
+        region(arm & (Z > 1.06) & (out_side > 0.72) & (out_side < 0.8), shirt * 0.55)
+        region(arm & (X > 0) & (Z > 1.36) & (Z < 1.41), accent * 0.9, 1)
+        # Trousers: double stripe down the outside, knee pads, thigh straps on the right leg.
+        region(leg & (Z > 0.3) & (out_side > 0.86), accent, 1)
+        region(leg & (Z > 0.3) & (out_side > 0.9) & (out_side < 0.94), pants * 0.7)
         for sx in (1, -1):
             kn = np.array(J['Knee_L'][0]) * np.array((sx, 1, 1))
-            dk = np.sqrt((X - kn[0]) ** 2 + (Z - kn[2]) ** 2)
-            region((dk < 0.09) & (front > 0.1) & (Z < 1.0), pants * 0.65, 0)
-        # Accent: shoulder pads, chest stripe, collar, boot tops, glove cuffs.
+            dk = np.sqrt(((X - kn[0]) * 1.25) ** 2 + ((Z - kn[2] - 0.015) * 0.8) ** 2)
+            pad = (dk < 0.075) & (front > 0.15) & leg
+            region(pad, accent * 0.55 + leather * 0.45, 1)
+            region(pad & (dk > 0.064), accent * 0.4 + leather * 0.45)                         # rim
+            region(pad & (np.abs(X - kn[0]) < 0.004), accent * 0.3 + leather * 0.4)              # pad seam
+        for zc in (0.73, 0.82):
+            strap = leg & (X < 0) & (np.abs(Z - zc) < 0.014)
+            region(strap, leather)
+            region(strap & (np.abs(Z - zc) > 0.011), leather * 0.7)
+            region(strap & (front > 0.6) & (np.abs(X + 0.11) < 0.018), metal)                   # buckle
+        # Belt with a metal buckle, loops and two pouches.
+        belt = torso & (Z >= 0.97) & (Z < 1.04)
+        region(belt, leather * 0.8)
+        region(belt & ((np.abs(Z - 0.975) < 0.004) | (np.abs(Z - 1.035) < 0.004)), leather * 0.55)
+        region(belt & (front > 0.6) & (np.abs(X) < 0.032), metal)
+        region(belt & (front > 0.6) & (np.abs(X) < 0.02) & (np.abs(Z - 1.005) < 0.014), leather * 0.5)
         for sx in (1, -1):
-            sh = np.array(J['Shoulder_L'][0]) * np.array((sx, 1, 1))
-            ds = np.sqrt((X - sh[0]) ** 2 + (Y - sh[1]) ** 2 + (Z - sh[2]) ** 2)
-            region((ds < 0.125) & (Z > 1.44), accent, 1)
-        region((Z >= 1.30) & (Z < 1.35) & torso & (front > -0.2), accent, 1)
-        region((Z >= 1.55) & (Z < 1.62) & torso, accent, 1)
-        region((Z >= 0.19) & (Z < 0.23), accent, 1)
-        region((Z >= 0.98) & (Z < 1.01) & (np.abs(X) > 0.3), accent, 1)
-        # Chest emblem: a circle on the upper chest.
-        em = np.sqrt((X * 1.1) ** 2 + (Z - 1.46) ** 2)
-        region((em < 0.055) & (front > 0.5) & torso, accent, 1)
-        region((em < 0.03) & (front > 0.5) & torso, shirt, 0)
+            pouch = torso & (np.abs(X - 0.17 * sx) < 0.045) & (Z > 0.9) & (Z < 0.99) & (np.abs(front) < 0.85)
+            region(pouch, leather * 0.95)
+            region(pouch & (Z > 0.965), leather * 0.75)                                         # flap
+            region(pouch & (np.abs(Z - 0.965) < 0.003), leather * 0.5)
+        # Gloves: dark with a padded back and a cuff in the trim colour.
+        glove = arm & (Z < 1.0)
+        gcol = np.array((0.2, 0.2, 0.22)) * 0.7 + pants * 0.3
+        region(glove, gcol)
+        region(glove & (out_side > 0.45) & (Z < 0.96), gcol * 0.7)
+        region(glove & (Z > 0.965), accent * 0.7 + gcol * 0.3, 1)
+        # Tall leather boots: folded cuff, criss-cross laces, toe cap, treaded sole.
+        boot = Z < 0.31
+        region(boot, leather)
+        region(boot & (Z > 0.27), leather * 0.75)
+        lace_area = boot & (front > 0.55) & (Z > 0.14) & (Z < 0.27)
+        lx = X - np.sign(X) * 0.12
+        region(lace_area & (np.abs(lx) < 0.035), leather * 0.6)                                   # tongue
+        cross = (np.abs(np.sin((Z + lx * 1.6) * 110)) < 0.16) | (np.abs(np.sin((Z - lx * 1.6) * 110)) < 0.16)
+        region(lace_area & (np.abs(lx) < 0.03) & cross, np.array((0.85, 0.82, 0.74)))             # laces
+        region(boot & (Z < 0.1) & (front > 0.3), leather * 0.85)                                  # toe cap
+        region(boot & (Z < 0.045), np.array((0.12, 0.11, 0.1)))                                   # sole
+        region(boot & (Z < 0.045) & (np.sin(Y * 220) > 0.4), np.array((0.08, 0.075, 0.07)))       # tread
+        region((Z >= 0.3) & (Z < 0.315) & leg, accent * 0.8, 1)                                    # boot-top trim
+
         # Head: hair on the top and back. Everything is measured from the head joint so the
         # face follows the head when the proportions change.
         hz = J['Head'][0][2]
@@ -781,46 +922,34 @@ def paint_textures(body, only=None):
             region((np.abs(Z - brow_z) < 0.009 * HK) & (np.abs(X - ex) < 0.05 * HK) & (front > 0.25) & head & ~hair_cond, hair * 0.7)
         mouth_z = hz - 0.065 * HK + (X / HK) ** 2
         region((np.abs(Z - mouth_z) < 0.006 * HK) & (np.abs(X) < 0.045 * HK) & (front > 0.3) & head, np.array((0.45, 0.2, 0.2)))
-        # ---- details: seams, pockets, zips, laces and such. Thin dark lines are a cheap way to make
-        # flat colour look like sewn clothing.
-        side = np.abs(N[:, 0]) > 0.8     # texels on the outer side of a limb / torso
-        is_shirt = (Z >= 1.05) & (Z < 1.62) & torso
-        leg = (Z < 0.98) & (np.abs(X) < 0.3)
-        arm = (Z >= 1.0) & (np.abs(X) >= 0.3)
+        # ---- details: seams, a zip, folds where cloth bunches (elbows, knees, waist, ankles) and
+        # stitching. Thin dark lines and soft creases make flat colour read as sewn clothing.
         seam = lambda cond: region(cond, col[cond] * 0.72)
-        seam(is_shirt & (np.abs(X) < 0.006) & (front > 0.5) & (Z > 1.08) & (Z < 1.55))                 # front zip
-        seam(is_shirt & (np.abs(np.abs(X) - 0.012) < 0.004) & (front > 0.5) & (Z > 1.08) & (Z < 1.55))  # zip tape
-        seam(is_shirt & side & (np.abs(Z - 1.2) < 0.5))                                                  # side seams
-        seam(is_shirt & (np.abs(Z - 1.075) < 0.006))                                                     # hem
-        seam(arm & (np.abs(Z - 1.24) < 0.006))                                                           # sleeve cuff
-        seam(arm & side & (Z > 1.26))                                                                    # sleeve seam
-        seam(leg & side)                                                                                 # outer leg seam
-        seam(leg & (np.abs(X) < 0.02) & (Z > 0.75) & (Z < 0.98) & (front > 0.5))                        # fly
-        for sx in (1, -1):                                                                               # pockets
-            pk = (np.abs(X - 0.09 * sx) < 0.045) & (Z > 0.82) & (Z < 0.95) & (front > 0.45) & leg
-            edge = pk & ((np.abs(np.abs(X - 0.09 * sx) - 0.045) < 0.006) | (np.abs(Z - 0.82) < 0.006))
-            seam(edge)
-            region(pk & (np.abs(Z - 0.935) < 0.008) & (np.abs(X - 0.09 * sx) < 0.03), col[pk & (np.abs(Z - 0.935) < 0.008) & (np.abs(X - 0.09 * sx) < 0.03)] * 0.8)
-            bk = (np.abs(X - 0.09 * sx) < 0.045) & (Z > 0.84) & (Z < 0.94) & (front < -0.45) & leg
-            seam(bk & ((np.abs(np.abs(X - 0.09 * sx) - 0.045) < 0.006) | (np.abs(Z - 0.84) < 0.006) | (np.abs(Z - 0.94) < 0.006)))
-        # Knee pad rims.
+        seam(chest & (np.abs(X) < 0.004) & (front > 0.5) & (Z > 1.05) & (Z < 1.57))                       # zip
+        seam(chest & (np.abs(np.abs(X) - 0.009) < 0.002) & (front > 0.5) & (Z > 1.05) & (Z < 1.57))
+        seam(chest & (np.abs(X) > 0.165) & (np.abs(X) < 0.175) & (np.abs(front) < 0.75))                 # side panel seams
+        seam(arm & (Z > 1.06) & (out_side < -0.85))                                                      # inner sleeve seam
+        seam(leg & (Z > 0.3) & (out_side < -0.88))                                                       # inseam
+        seam(leg & (np.abs(X) < 0.012) & (Z > 0.78) & (Z < 0.97) & (front > 0.5))                        # fly
+        stitch = np.sin((Z + X) * 900) > 0.2
+        lighten = lambda cond: region(cond, np.clip(col[cond] * 1.18 + 0.03, 0, 1), mask[cond])
+        lighten(chest & (front > 0.35) & (np.abs(np.abs(X) - pw - 0.012) < 0.0018) & (Z < 1.57) & stitch)
+        lighten(leg & (Z > 0.3) & (np.abs(out_side - 0.8) < 0.012) & stitch)
+        folds = np.zeros(len(X))
         for sx in (1, -1):
+            el = np.array(J['Elbow_L'][0]) * np.array((sx, 1, 1))
+            d_el = np.abs(Z - el[2])
+            folds += arm * (d_el < 0.07) * (1 - d_el / 0.07) * np.clip(np.sin((Z - el[2]) * 160 + np.abs(X) * 40), 0, 1)
             kn = np.array(J['Knee_L'][0]) * np.array((sx, 1, 1))
-            dk = np.sqrt((X - kn[0]) ** 2 + (Z - kn[2]) ** 2)
-            seam((np.abs(dk - 0.085) < 0.007) & (front > 0.1) & (Z < 1.0))
-            region((dk < 0.05) & (front > 0.4) & (Z < 1.0), pants * 0.5, 0)
-        # Boots: laces, tongue and a welt above the sole.
-        boot = Z < 0.21
-        region(boot & (np.abs(Z - 0.085) < 0.006), dark * 1.8, 0)                                        # welt
-        region(boot & (Z > 0.1) & (Z < 0.2) & (np.abs(np.sin(Z * 190)) > 0.85) & (front > 0.55), np.array((0.55, 0.55, 0.58)), 0)  # laces
-        region(boot & (Z > 0.1) & (np.abs(X - np.round(X / 0.24) * 0.24) < 0.004) & (front > 0.55), dark * 1.6, 0)  # lace loop line
-        # Gloves: knuckle pad and a strap at the wrist.
-        glove = (Z < 1.0) & (np.abs(X) > 0.3)
-        region(glove & (Z > 0.95) & (Z < 0.975), accent * 0.8 + dark * 0.2, 1)
-        region(glove & (Z < 0.9) & (front > 0.3), dark * 1.5, 0)
-        # Collar fold and a stitched shoulder yoke.
-        region(is_shirt & (Z > 1.59) & (front > -0.5), shirt * 0.55, 0)
-        seam(is_shirt & (np.abs(Z - 1.50) < 0.005) & (front < -0.2))
+            d_kn = np.abs(Z - kn[2])
+            folds += leg * (front < -0.2) * (d_kn < 0.08) * (1 - d_kn / 0.08) * np.clip(np.sin((Z - kn[2]) * 140 + X * 30), 0, 1)
+        d_w = np.abs(Z - 1.075)
+        folds += chest * (d_w < 0.04) * (1 - d_w / 0.04) * np.clip(np.sin(X * 90 + Z * 40), 0, 1) * 0.7
+        d_a = np.abs(Z - 0.33)
+        folds += leg * (d_a < 0.04) * (1 - d_a / 0.04) * np.clip(np.sin(X * 120 + Y * 60 + Z * 200), 0, 1)
+        crotch_fold = leg & (Z > 0.8) & (np.abs(X) < 0.12) & (front > 0.2)
+        folds += crotch_fold * np.clip(np.sin((np.abs(X) * 1.4 - (Z - 0.8)) * 120), 0, 1) * 0.6
+        col *= (1.0 - 0.16 * np.clip(folds, 0, 1))[:, None]
         # Face: brow ridge shadow, cheek colour, nose and chin shading, lips.
         hz = J['Head'][0][2]
         ck = 0.9 * HK
@@ -853,7 +982,7 @@ def paint_textures(body, only=None):
         ao *= 1.0 - 0.2 * np.clip(1.0 - np.abs(Z - 1.07) / 0.03, 0, 1) * torso                     # under the belt
         ao *= 1.0 - 0.15 * np.clip(1.0 - np.abs(Z - 1.25) / 0.04, 0, 1) * (np.abs(X) >= 0.3)       # inside the elbow
         weave = 1.0 + 0.035 * np.sin(X * 900 + Y * 300) * np.sin(Z * 900 + Y * 200)
-        weave = np.where((Z < 1.62) & ~head & ~boot & ~glove, weave, 1.0)
+        weave = np.where((Z < 1.64) & ~head & ~boot & ~glove, weave, 1.0)
         col *= (shade * ao * weave)[:, None]
         col *= (0.98 + 0.04 * noise)[:, None]
         # Leather and metal pieces are a touch glossy: lighten their tops a little more.

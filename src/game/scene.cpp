@@ -1,5 +1,6 @@
 // Blockfall - turns game state into a list of mesh instances for the renderer
 #include "scene.h"
+#include "occlusion.h"
 #include "charanim.h"
 #include "charface.h"
 #include "charphys.h"
@@ -119,6 +120,7 @@ struct FigurePose {
     bool knocked = false;    // down on hands and knees
     float walkPhase = 0;
     float moveAmount = 0;
+    float moveAngle = 0;     // movement direction compared with the facing (radians, + = to the right)
     Vec4 shirt;
     int look = 0;            // varies skin tone
     int skin = 0;            // outfit from the locker
@@ -138,6 +140,13 @@ struct FigurePose {
     bool dance = false;
     float eyeDistance = 0;   // for the level of detail
 };
+
+// Direction of travel compared with the facing: 0 ahead, +pi/2 right, pi behind. 0 when standing.
+float moveAngleOf(const Vec3& vel, float yaw) {
+    if (lengthXZ(vel) < 0.3f) return 0.0f;
+    float a = std::atan2(vel.x, vel.z) - yaw;
+    return std::atan2(std::sin(a), std::cos(a));
+}
 
 // A pickaxe held in a hand: handle along +z, head at the far end. `root` = hand space.
 void addPickaxeModel(SceneList& s, const Mat4& root) {
@@ -191,6 +200,7 @@ bool addSkinnedFigure(SceneList& s, const FigurePose& f) {
     in.pickaxe = f.held && f.held->kind == ItemKind::Pickaxe;
     in.moveAmount = f.moveAmount;
     in.walkPhase = f.walkPhase;
+    in.moveAngle = f.knocked ? 0.0f : f.moveAngle;
     in.aimPitch = f.aimPitch;
     in.reloadFrac = f.reloadFrac;
     in.swing = f.swing;
@@ -202,9 +212,10 @@ bool addSkinnedFigure(SceneList& s, const FigurePose& f) {
     Pose pose;
     if (!evalCharacterPose(*m, st, in, pose)) return false;
 
-    // Knocked: crouch pose tipped forward onto hands and knees.
+    // Knocked: crouch pose tipped forward onto hands and knees. Otherwise the body turns by the
+    // legs' yaw (strafing / backing up); the animation already turned the chest back to the aim.
     Mat4 root = f.knocked ? Mat4::translation(Vec3(0, -0.05f, 0.25f)) * Mat4::rotationX(0.85f) * Mat4::rotationY(f.yaw) * Mat4::translation(f.feet)
-                          : Mat4::rotationY(f.yaw) * Mat4::translation(f.feet);
+                          : Mat4::rotationY(f.yaw + st.legYaw) * Mat4::translation(f.feet);
     const Skin& outfit = skinAt(f.skin);
 
     // Face and secondary motion, only close to the camera (nobody sees a blink 80 m away).
@@ -613,7 +624,7 @@ Anim botAnim(const Game& g, const Bot& b) {
     if (b.healTimer >= 0) return Anim::Heal;
     if (b.gunState.reloadTimer > 0) return Anim::Reload;
     if (b.shotAnim > 0) return Anim::Shoot;
-    if (speed > 5.0f) return Anim::Sprint;
+    if (speed > BOT_SPRINT_SPEED) return Anim::Sprint;
     if (speed > 0.4f) return Anim::Walk;
     if (b.state == AIState::Shoot) return Anim::Aim;
     return Anim::Idle;
@@ -629,6 +640,13 @@ Vec4 teamColor(int team, bool isPlayer) {
 
 Mat4 cameraView(const Camera& c) { return Mat4::lookAtLH(c.eye, c.eye + c.forward, Vec3(0, 1, 0)); }
 Mat4 cameraProj(const Camera& c, float aspect) { return Mat4::perspectiveLH(c.fovY, aspect, 0.1f, 600.0f); }
+
+// Occlusion culling switch and last frame's numbers (see occlusion.h).
+static bool g_occlusion = true;
+static OcclusionStats g_occStats;
+void setOcclusionCulling(bool on) { g_occlusion = on; }
+bool occlusionCulling() { return g_occlusion; }
+OcclusionStats lastOcclusionStats() { return g_occStats; }
 
 void buildScene(const Game& g, float aspect, SceneList& s) {
     s.clear();
@@ -813,6 +831,7 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
         f.yaw = b.yaw;
         f.walkPhase = b.walkPhase;
         f.moveAmount = clampf(lengthXZ(b.body.vel) / 4.0f, 0.0f, 1.0f);
+        f.moveAngle = moveAngleOf(b.body.vel, b.yaw);
         f.shirt = skinAt(b.skin).shirt;
         f.skin = b.skin;
         f.teamTint = b.team == 0;
@@ -842,6 +861,7 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
         f.yaw = p.yaw;
         f.walkPhase = p.walkPhase;
         f.moveAmount = clampf(lengthXZ(p.body.vel) / 4.0f, 0.0f, 1.0f);
+        f.moveAngle = moveAngleOf(p.body.vel, p.yaw);
         f.shirt = skinAt(p.skin).shirt;
         f.skin = p.skin;
         const Item& held = g.heldItem();
@@ -900,6 +920,29 @@ void buildScene(const Game& g, float aspect, SceneList& s) {
         Vec4 c = t.color;
         c.w *= 1.0f - t.age / 0.08f;
         addBeam(s.transparent[MESH_CUBE], t.from, t.to, 0.035f, c);
+    }
+
+    // Occlusion culling: skip what is outside the view or hidden behind the ground, house walls
+    // and floors, and unedited build walls/floors (they still cast shadows).
+    if (occlusionCulling()) {
+        static OcclusionCuller occ;
+        occ.begin(s.view, s.proj, s.eye);
+        occ.addGround(w);
+        std::vector<AABB> boxes;
+        for (const StaticBox& b : w.statics)
+            if (b.alive && b.collide && (b.kind == PropKind::HouseWall || b.kind == PropKind::HouseFloor)) occ.addBox(b.box);
+        for (const Piece& p : w.build.pieces()) {
+            if (!p.alive || p.age < 0.6f || p.id == g.player.edit.pieceId) continue;   // popping in / being edited
+            if (p.slot.type != PieceType::Wall && p.slot.type != PieceType::Floor) continue;
+            boxes.clear();
+            pieceBoxes(p, boxes);
+            for (const AABB& b : boxes) occ.addBox(b);
+        }
+        occ.finish();
+        occ.cullScene(s);
+        g_occStats = {occ.tested, occ.culledFrustum, occ.culledOccluded, occ.occluderTriangles};
+    } else {
+        g_occStats = OcclusionStats();
     }
 }
 

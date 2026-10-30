@@ -10,6 +10,7 @@
 #include "game/hud.h"
 #include "game/loot.h"
 #include "game/scene.h"
+#include "game/occlusion.h"
 #include "game/frontend.h"
 #include "game/keybinds.h"
 #include "game/settings.h"
@@ -2252,15 +2253,32 @@ static void testCharacterModel() {
     Pose w0, w1, wEnd;
     model.restPose(w0); model.restPose(w1); model.restPose(wEnd);
     const AnimClip* walk = model.clip("walk");
-    model.sampleClip(model.clipIndex("walk"), walk->duration * 0.25f, true, w0);
-    model.sampleClip(model.clipIndex("walk"), walk->duration * 0.75f, true, w1);
+    // Left heel strikes at the start of the cycle (foot out front) and pushes off half a cycle later.
+    model.sampleClip(model.clipIndex("walk"), 0.0f, true, w0);
+    model.sampleClip(model.clipIndex("walk"), walk->duration * 0.5f, true, w1);
     model.sampleClip(model.clipIndex("walk"), walk->duration, true, wEnd);
     Mat4 wa[MAX_BONES], wb[MAX_BONES];
     model.boneWorld(w0, wa);
     model.boneWorld(w1, wb);
     int footL = model.boneIndex("Foot_L");
     Vec3 fa = model.bonePosition(wa, footL), fb = model.bonePosition(wb, footL);
-    CHECK(std::fabs(fa.z - fb.z) > 0.2f, "walk cycle swings the left foot %.2f m", std::fabs(fa.z - fb.z));
+    CHECK(std::fabs(fa.z - fb.z) > 0.6f, "walk cycle swings the left foot %.2f m", std::fabs(fa.z - fb.z));
+    // The planted foot moves back exactly as far as the body moves forward in that half cycle
+    // (STRIDE_WALK radians of walkPhase per metre), so it doesn't skate over the ground.
+    {
+        Pose q0, q1;
+        model.restPose(q0);
+        model.restPose(q1);
+        float t0 = walk->duration * 0.05f, t1 = walk->duration * 0.30f;   // both inside the left foot's stance
+        model.sampleClip(model.clipIndex("walk"), t0, true, q0);
+        model.sampleClip(model.clipIndex("walk"), t1, true, q1);
+        Mat4 m0[MAX_BONES], m1[MAX_BONES];
+        model.boneWorld(q0, m0);
+        model.boneWorld(q1, m1);
+        float footMoved = std::fabs(model.bonePosition(m0, footL).z - model.bonePosition(m1, footL).z);
+        float bodyMoved = (0.30f - 0.05f) * 2.0f * PI / STRIDE_WALK;
+        CHECK(std::fabs(footMoved - bodyMoved) < 0.03f, "planted foot keeps pace with the ground (%.3f vs %.3f m)", footMoved, bodyMoved);
+    }
     Pose wStart;
     model.restPose(wStart);
     model.sampleClip(model.clipIndex("walk"), 0.0f, true, wStart);
@@ -2285,7 +2303,7 @@ static void testCharacterModel() {
     CHECK(st.lowerBlend >= 1.0f, "cross-fade finishes");
     // Walking with a gun: legs from walk, arms from aim.
     in.gun = true;
-    in.walkPhase = PI * 0.5f;
+    in.walkPhase = 0.0f;   // left heel strike: the left foot is out in front
     in.clock += 0.5f;
     for (int i = 0; i < 20; ++i) { in.clock += 0.016f; evalCharacterPose(model, st, in, out); }
     model.boneWorld(out, world);
@@ -2300,6 +2318,32 @@ static void testCharacterModel() {
     hr = model.bonePosition(world, handR);
     CHECK(hr.y > handY0 + 0.1f, "looking up lifts the gun hand (%.2f -> %.2f)", handY0, hr.y);
     in.aimPitch = 0;
+    // Strafing: the legs turn toward the movement, the chest stays on the aim.
+    {
+        int chest = model.boneIndex("Chest");
+        model.boneWorld(out, world);
+        auto dirOf = [](const Vec3& v, const Mat4& m) { return transformPoint(v, m) - transformPoint(Vec3(0, 0, 0), m); };
+        Vec3 chestDir0 = dirOf(Vec3(1, 0, 0), world[chest]);
+        in.moveAngle = PI * 0.5f;   // moving to the right
+        for (int i = 0; i < 40; ++i) { in.clock += 0.016f; evalCharacterPose(model, st, in, out); }
+        CHECK(std::fabs(st.legYaw - LEG_YAW_MAX) < 0.02f && !st.backward, "strafing right turns the legs right (%.2f rad)", st.legYaw);
+        // The scene turns the whole body by legYaw; the chest must come back to the aim.
+        model.boneWorld(out, world);
+        Vec3 chestDir = dirOf(dirOf(Vec3(1, 0, 0), world[chest]), Mat4::rotationY(st.legYaw));
+        CHECK(dot(normalize(chestDir), normalize(chestDir0)) > 0.97f, "strafing: chest still faces the aim (%.3f)",
+              dot(normalize(chestDir), normalize(chestDir0)));
+        in.moveAngle = PI;          // backing up
+        for (int i = 0; i < 40; ++i) { in.clock += 0.016f; evalCharacterPose(model, st, in, out); }
+        CHECK(st.backward && std::fabs(st.legYaw) < 0.02f, "backing up: legs face forward, cycle reversed (%.2f)", st.legYaw);
+        in.moveAngle = PI * 0.75f;  // back and to the right: legs turn the other way
+        for (int i = 0; i < 40; ++i) { in.clock += 0.016f; evalCharacterPose(model, st, in, out); }
+        CHECK(st.backward && st.legYaw < -0.6f, "backing up to the right turns the legs left (%.2f)", st.legYaw);
+        in.moveAngle = 0;
+        in.moveAmount = 0;
+        for (int i = 0; i < 40; ++i) { in.clock += 0.016f; evalCharacterPose(model, st, in, out); }
+        CHECK(!st.backward && std::fabs(st.legYaw) < 0.02f, "standing still: legs straight again");
+        in.moveAmount = 1;
+    }
     in.gun = false;
     in.pickaxe = true;
     in.swing = 0.5f;
@@ -2710,6 +2754,103 @@ static void testOutfits() {
     if (characterModel()) CHECK(carries, "character draws carry build and palette");
 }
 
+static void testOcclusion() {
+    section("Occlusion culling");
+    // A camera at the origin looking down +z.
+    Mat4 view = Mat4::lookAtLH(Vec3(0, 2, 0), Vec3(0, 2, 10), Vec3(0, 1, 0));
+    Mat4 proj = Mat4::perspectiveLH(deg2rad(70.0f), 16.0f / 9.0f, 0.1f, 600.0f);
+    OcclusionCuller occ;
+    occ.begin(view, proj, Vec3(0, 2, 0));
+    occ.addBox(AABB({-4, 0, 10}, {4, 5, 10.3f}));   // a wall 10 m ahead, 8 m wide, 5 m tall
+    occ.finish();
+    CHECK(occ.occluderTriangles > 0, "the wall is drawn into the depth picture (%d triangles)", occ.occluderTriangles);
+    CHECK(!occ.sphereVisible(Vec3(0, 2, 20), 0.8f), "a barrel right behind the wall is hidden");
+    CHECK(occ.sphereVisible(Vec3(0, 2, 6), 0.8f), "a barrel in front of the wall is drawn");
+    CHECK(occ.sphereVisible(Vec3(0, 7, 20), 0.8f), "something sticking up over the wall is drawn");
+    CHECK(occ.sphereVisible(Vec3(10.0f, 2, 20), 0.8f), "something past the end of the wall is drawn");
+    CHECK(!occ.sphereVisible(Vec3(0, 2, -10), 0.8f), "something behind the camera is skipped");
+    CHECK(!occ.sphereVisible(Vec3(60, 2, 10), 0.8f), "something far off to the side is skipped");
+    CHECK(occ.sphereVisible(Vec3(0, 2, 0.5f), 0.8f), "something touching the camera is always drawn");
+    // Big things behind a small wall stay visible (only fully covered things are hidden).
+    CHECK(occ.sphereVisible(Vec3(0, 2, 30), 8.0f), "a house-sized thing behind the small wall is drawn");
+
+    // Hills: a raised plateau between the camera and a target hides it; one on top is drawn.
+    Game g;
+    g.reset(7);
+    World& w = g.world;
+    w.flattenTerrain(0, 0, 400, 0);            // flat map
+    w.flattenTerrain(0, 80, 25, 30);           // a 30 m high plateau 80 m ahead
+    Vec3 eye(0, 2, 0);
+    Mat4 v2 = Mat4::lookAtLH(eye, Vec3(0, 2, 100), Vec3(0, 1, 0));
+    occ.begin(v2, proj, eye);
+    occ.addGround(w);
+    occ.finish();
+    CHECK(!occ.sphereVisible(Vec3(0, 3, 150), 2.0f), "a player behind the hill is hidden");
+    CHECK(occ.sphereVisible(Vec3(0, w.terrainHeight(0, 80) + 1.0f, 80), 1.0f), "a player standing on the hill is drawn");
+    CHECK(occ.sphereVisible(Vec3(0, 95, 150), 2.0f), "a glider high above the hill is drawn");
+
+    // Never hides what a straight line from the eye can reach (checked against the world raycast).
+    {
+        // Stand 14 m from a house and look at it: plenty is hidden behind its walls.
+        g.reset(11);
+        g.landEveryone();
+        Vec3 house = g.world.houseCenters[g.world.houseCenters.size() / 2];
+        Vec3 eye = house + Vec3(-14, 0, 0);
+        eye.y = g.world.terrainHeight(eye.x, eye.z) + 2.0f;
+        g.camera.eye = eye;
+        g.camera.forward = normalize(Vec3(house.x, eye.y, house.z) - eye);
+        SceneList scene;
+        setOcclusionCulling(false);
+        buildScene(g, 16.0f / 9.0f, scene);
+        OcclusionCuller c;
+        c.begin(scene.view, scene.proj, scene.eye);
+        c.addGround(g.world);
+        for (const StaticBox& b : g.world.statics)
+            if (b.alive && b.collide && (b.kind == PropKind::HouseWall || b.kind == PropKind::HouseFloor)) c.addBox(b.box);
+        c.finish();
+        int hidden = 0, wrong = 0;
+        Rng rng(5);
+        for (int i = 0; i < 4000; ++i) {
+            Vec3 p(house.x + rng.range(0.0f, 120.0f), 0, house.z + rng.range(-40.0f, 40.0f));
+            p.y = g.world.terrainHeight(p.x, p.z) + rng.range(0.5f, 3.0f);
+            if (!c.inFrustum(p, 0.5f) || c.sphereVisible(p, 0.5f)) continue;
+            ++hidden;
+            // Hidden: every line from the eye to the point must be blocked by something solid.
+            Vec3 d = p - scene.eye;
+            float len = length(d);
+            HitInfo h;
+            bool blocked = g.world.raycast(Ray{scene.eye, d / len}, len - 0.6f, h, false);
+            if (!blocked) {
+                // The world raycast may not include the ground; check the line against the terrain.
+                for (float t = 0.02f; t < 0.98f && !blocked; t += 0.01f) {
+                    Vec3 q = scene.eye + d * t;
+                    blocked = q.y < g.world.terrainHeight(q.x, q.z);
+                }
+            }
+            if (!blocked) ++wrong;
+        }
+        CHECK(hidden > 30 && wrong == 0, "hidden points are really out of sight (%d hidden, %d wrongly)", hidden, wrong);
+        setOcclusionCulling(true);
+    }
+
+    // The scene: hidden instances move to the shadow-only lists (they still cast shadows).
+    {
+        SceneList scene;
+        setOcclusionCulling(false);
+        buildScene(g, 16.0f / 9.0f, scene);
+        size_t all = scene.totalInstances();
+        setOcclusionCulling(true);
+        buildScene(g, 16.0f / 9.0f, scene);
+        size_t shadows = 0;
+        for (int m = 0; m < MESH_COUNT; ++m) shadows += scene.shadowOnly[m].size();
+        OcclusionStats st = lastOcclusionStats();
+        std::printf("  %zu instances: %d outside the view, %d behind something; %d occluder triangles\n", all,
+                    st.culledFrustum, st.culledOccluded, st.occluderTriangles);
+        CHECK(scene.totalInstances() < all / 2, "most of the map isn't drawn from one spot (%zu of %zu)", scene.totalInstances(), all);
+        CHECK(shadows > 0 && !scene.opaque[MESH_TERRAIN].empty(), "hidden things still cast shadows; the ground is never culled");
+    }
+}
+
 static void testPerformance() {
     section("Performance (CPU side of one frame)");
     Game g;
@@ -2770,6 +2911,7 @@ int main() {
     testSound();
     testSecondaryMotion();
     testOutfits();
+    testOcclusion();
     testPerformance();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

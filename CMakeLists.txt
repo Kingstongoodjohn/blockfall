@@ -22,6 +22,7 @@ set(GAME_SOURCES
     src/game/loot.cpp
     src/game/map.cpp
     src/game/nav.cpp
+    src/game/occlusion.cpp
     src/game/sfx.cpp
     src/game/player.cpp
     src/game/scene.cpp
@@ -55,12 +56,15 @@ if(WIN32)
         src/platform/input_win32.cpp
         src/platform/renderer_d3d11.cpp
         src/platform/audio_xaudio2.cpp
+        src/platform/res/blockfall.rc   # icon, version details, app manifest
     )
     # XAudio2 itself is loaded at runtime (no import library); ole32 is for CoInitializeEx.
     target_link_libraries(Blockfall PRIVATE blockfall_core d3d11 dxgi d3dcompiler gdi32 ole32)
     if(MSVC)
         target_compile_options(Blockfall PRIVATE /W4 /permissive-)
         set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Blockfall)
+        # The manifest comes from res/blockfall.rc; don't let the linker add a second one.
+        target_link_options(Blockfall PRIVATE /MANIFEST:NO)
     else()
         target_compile_options(Blockfall PRIVATE -Wall -Wextra)
         # MinGW: no extra runtime DLLs needed next to the .exe.
