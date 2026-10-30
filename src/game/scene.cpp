@@ -255,6 +255,7 @@ bool addSkinnedFigure(SceneList& s, const FigurePose& f) {
     d.build = outfit.build;
     d.kit = outfit.kit;
     d.kitMaterial = outfit.kitMaterial;
+    d.fx = outfit.fx;
     d.face = detail;
     d.main = outfit.shirt;
     d.second = outfit.pants;

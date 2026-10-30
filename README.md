@@ -29,6 +29,26 @@ any new unsigned download as risky until enough people have run it.
 The exe carries its name, version, publisher and an app manifest, which keeps the guessing
 checks calmer. Only signing the exe with a code-signing certificate removes these warnings for good.
 
+## What's new in v16 - 30 new skins with glowing FX, and a K-Bucks store
+
+- **30 new skins (94 in all).** Each started as a written concept (in `skins_catalog.py`), then
+  got a palette, a body build and outfit pieces, its own painted texture and, for some, emission
+  FX. Among them: MAGMA CORE (obsidian armour with lava glowing through the cracks), FROSTBYTE
+  (ice-white with lit cyan circuits), VOID WALKER, GLITCH (flickering pixel camo), JADE SENTINEL,
+  SUNFORGE, AURORA (teal-to-violet gradient) and NEON RACER.
+- **Five new patterns:** energy cracks, circuit traces, tiger stripes, gradients and pixel camo.
+- **Emission FX:** a skin's trim, cracks or circuit lines can glow (with a slow pulse) and its
+  eyes and goggle lenses can light up. Glowing parts ignore shadows.
+- **More than 64 skins can be owned.** Accounts and settings now remember up to 128; old files
+  load as before.
+- **GET K-BUCKS** (Item Shop): buy K-Bucks with real money through Stripe at the old V-Bucks
+  prices: 1,000 for $7.99, 2,800 for $19.99, 5,000 for $31.99, 13,500 for $79.99. The game opens
+  Stripe's checkout page in your browser, then adds the K-Bucks a few seconds after you pay.
+  Purchases not finished yet are remembered in your account and picked up the next time you
+  start the game. It needs the small payment server in `server/payments` to be online; see
+  [its README](server/payments/README.md) for the 20-minute setup. Until then the screen says the
+  store isn't set up.
+
 ## What's new in v15 - animations that touch the ground, tailored outfits, occlusion culling
 
 - **Feet stay on the ground.** Every standing and moving animation now uses leg IK: the game
@@ -529,6 +549,9 @@ tests/          logic tests
 - Bots only plan paths along the ground, and only once they're stuck. They don't plan routes up
   ramps or across upper floors, so tall builds can still trip them up.
 - Friends are local to your PC (AI teammates with their names), not real online players.
+- K-Bucks are kept in the account file on your PC, so they can be edited by hand. Payments go
+  through Stripe and each purchase is credited once, but a cheat-proof balance needs online
+  accounts.
 - Occlusion culling only uses the ground, house walls/floors and unedited build walls/floors as
   blockers. Trees, rocks and edited builds never hide anything.
 - The graphics effects are this game's own small versions, not UE5's. There's no real global illumination, just screen-space AO and bounce.

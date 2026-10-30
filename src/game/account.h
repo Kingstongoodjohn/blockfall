@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "skinset.h"
 
 namespace bf {
 
@@ -15,7 +16,8 @@ struct Account {
     std::string name;
     uint64_t passHash = 0;
     int kbucks = 0;
-    uint64_t ownedSkins = 1;
+    SkinSet ownedSkins;
+    std::vector<std::string> purchases;   // K-Bucks purchases still waiting to be claimed ("id:token:kbucks")
     int equippedSkin = 0;
     int matches = 0, wins = 0, kills = 0;
 

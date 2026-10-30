@@ -25,3 +25,7 @@ node_modules/
 # Editors (Visual Studio "Open Folder" and VS Code local state)
 .vs/
 .vscode/
+
+# Payment server: local test database and Python caches
+server/payments/*.db
+.pytest_cache/

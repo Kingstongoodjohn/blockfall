@@ -20,6 +20,8 @@ void kitMaterialParams(int m, float& rough, float& metal);
 constexpr int SKIN_PRICE = 1200;      // K-Bucks, the RARE price (see skinPrice for the others)
 constexpr int KBUCKS_PER_KILL = 25;
 constexpr int SKIN_RARITIES = 4;
+constexpr int SKIN_FX_TRIM = 1;
+constexpr int SKIN_FX_EYES = 2;
 
 struct Skin {
     const char* name;
@@ -27,12 +29,13 @@ struct Skin {
     int hairStyle;    // 0 spiky, 1 flat cap of hair, 2 mohawk, 3 long/back
     int hatStyle;     // 0 none, 1 cap, 2 beanie, 3 helmet
     bool headband;
-    int pattern;      // 0 plain, 1 stripes, 2 camo, 3 checker, 4 hex, 5 stars, 6 flames, 7 sash, 8 racing, 9 plaid, 10 two-tone, 11 chevrons, 12 lightning, 13 panelled
+    int pattern;      // 0 plain .. 13 panelled, 14 cracks, 15 circuit, 16 tiger, 17 gradient, 18 pixels (PATTERN_NAME in skins_catalog.py)
     int skinTone;
     int rarity;       // 0 uncommon, 1 rare, 2 epic, 3 legendary
     int build;        // BodyBuild
     uint32_t kit;     // bit per KitPiece
     int kitMaterial;  // KitMaterial of the main kit pieces
+    int fx;           // emission: SKIN_FX_TRIM (trim/accent paint glows), SKIN_FX_EYES (eyes and lenses glow)
     bool wears(KitPiece k) const { return (kit >> (int)k) & 1u; }
 };
 Vec4 skinToneColor(int tone);   // SKIN_TONES in skins_catalog.py

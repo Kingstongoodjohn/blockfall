@@ -338,6 +338,7 @@ cbuffer Char : register(b2) {
     float4 charFlags;    // x mesh kind (0 body, 1 painted mesh, 2 atlas mesh), y face parts drawn, z style (1 realistic), w atlas loaded
     float4 zoneColor[16];
     float4 zoneMat[16];  // x roughness, y metalness (each -1 = use the atlas)
+    float4 charFx;       // emission: x trim/accent paint and the accent zone, y eyes and goggle lenses
 };
 Texture2D skinTex : register(t1);
 Texture2D charNormal : register(t4);
@@ -345,7 +346,7 @@ Texture2D charMaterial : register(t5);
 SamplerState skinSamp : register(s2);
 
 // Zones (tools/character/meshutil.py).
-static const int Z_CUT = 0, Z_ACCENT = 3, Z_HAIR = 6, Z_SKIN = 7, Z_LIPS = 10, Z_BODY = 11, Z_BODY_SKIN = 13;
+static const int Z_CUT = 0, Z_ACCENT = 3, Z_HAIR = 6, Z_SKIN = 7, Z_EYE = 8, Z_LIPS = 10, Z_BODY = 11, Z_LENS = 12, Z_BODY_SKIN = 13;
 
 struct VSSkinIn {
     float3 pos     : POSITION;
@@ -438,7 +439,7 @@ float3 perturbNormal(float3 N, float3 p, float2 uv, float3 tn, out float3 B) {
 }
 
 struct CharSurf {
-    float3 albedo, n, ngeo, strand;
+    float3 albedo, n, ngeo, strand, emit;
     float rough, metal, ao;
     int zone;
 };
@@ -454,6 +455,7 @@ CharSurf charSurface(VSSkinOut i, bool front) {
     s.metal = 0.0;
     s.ao = 1.0;
     s.zone = Z_BODY;
+    s.emit = float3(0, 0, 0);
     int kind = (int)(charFlags.x + 0.5);
     if (charFlags.w > 0.5) {
         s.zone = atlasZone(i.uv2);
@@ -473,9 +475,16 @@ CharSurf charSurface(VSSkinOut i, bool front) {
         float4 tex = skinTex.Sample(skinSamp, i.uv);
         s.albedo = tex.rgb * charTint.rgb;
         s.albedo = lerp(s.albedo, charAccent.rgb, tex.a * charParams.z);   // team trim
+        // Emission mask: the painted trim (texture alpha) glows on FX skins (energy cracks,
+        // circuit lines, piping).
+        s.emit = s.albedo * tex.a * charFx.x;
     } else {
         s.albedo = zoneColor[s.zone].rgb;
-        if (s.zone == Z_ACCENT) s.albedo = lerp(s.albedo, charAccent.rgb, charParams.z);
+        if (s.zone == Z_ACCENT) {
+            s.albedo = lerp(s.albedo, charAccent.rgb, charParams.z);
+            s.emit = s.albedo * charFx.x;
+        }
+        if (s.zone == Z_EYE || s.zone == Z_LENS) s.emit = lerp(float3(1, 1, 1), zoneColor[Z_ACCENT].rgb, 0.8) * charFx.y;
         float4 zm = zoneMat[s.zone];
         if (zm.x >= 0.0) s.rough = saturate(zm.x + (s.rough - 0.5) * 0.4);
         if (zm.y >= 0.0) s.metal = zm.y;
@@ -550,6 +559,7 @@ PSOut PSChar(VSSkinOut i, bool front : SV_IsFrontFace) {
         c += pow(1.0 - ndv, 4.0) * 0.12 * ambient;
     }
     c += s.albedo * charParams.x * 0.7;
+    c += s.emit * 1.8;   // emission FX: unaffected by light or shadow (Post-processing blooms it)
 
     PSOut o;
     o.color = float4(c, 1.0);
@@ -805,6 +815,7 @@ struct CharCB {
     Vec4 flags;            // x mesh kind, y face parts drawn, z style, w atlas loaded
     Vec4 zoneColor[16];
     Vec4 zoneMat[16];      // x roughness, y metalness (-1 = from the atlas)
+    Vec4 fx;               // x trim/accent emission, y eye/lens emission (glow strength)
 };
 
 // Atlas zones (tools/character/meshutil.py; keep the two lists in step).
@@ -1733,6 +1744,9 @@ void RendererD3D11::drawCharacters(const SceneList& scene, bool shadowPass) {
         cb.zoneColor[ZONE_LENS] = Vec4(0.06f, 0.16f, 0.22f, 1);
         cb.zoneMat[ZONE_MAIN] = Vec4(kr, km, 0, 0);
         cb.zoneMat[ZONE_ACCENT] = Vec4(kr, km, 0, 0);
+        // Emission FX: a slow pulse so energy cracks and circuits look alive.
+        float pulse = 0.8f + 0.2f * std::sin(frame_ / 60.0f * 3.0f + (float)c.skin);
+        cb.fx = Vec4((c.fx & SKIN_FX_TRIM) ? 0.9f * pulse : 0.0f, (c.fx & SKIN_FX_EYES) ? 1.2f : 0.0f, 0, 0);
 
         int skin = skinSrv_.empty() ? 0 : ((c.skin % (int)skinSrv_.size()) + (int)skinSrv_.size()) % (int)skinSrv_.size();
         ID3D11ShaderResourceView* srv = skinSrv_[skin];

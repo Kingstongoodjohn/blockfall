@@ -42,6 +42,7 @@ struct CharacterDraw {
     int build = 0;          // BodyBuild
     uint32_t kit = 0;       // outfit pieces worn (bit per KitPiece)
     int kitMaterial = 0;    // KitMaterial of the main pieces
+    int fx = 0;             // emission FX (SKIN_FX_TRIM / SKIN_FX_EYES)
     bool face = true;       // draw the 3D face parts (close up)
     bool shadowOnly = false;  // hidden from the camera (occlusion culling): only casts its shadow
     // Palette for the outfit pieces, hair and face (the body uses its painted skin texture).

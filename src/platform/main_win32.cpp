@@ -9,6 +9,7 @@
 #include "../game/map.h"
 #include "../game/skins.h"
 #include "audio_xaudio2.h"
+#include "http_win32.h"
 #include "input_win32.h"
 #include "renderer_d3d11.h"
 
@@ -123,6 +124,7 @@ struct Demo {
             r.mouseX = 240; r.mouseY = 240;  // hover PLAY
         }
         if (f == 20) pendingShot = "01_lobby.bmp";
+        if (f == 21) { fe.screen = Screen::KBucks; pendingShot = "01b_kbucks.bmp"; }
         if (f == 22) fe.screen = Screen::Friends;
         if (f == 32) pendingShot = "02_friends.bmp";
         if (f == 34) { fe.screen = Screen::Settings; fe.settingsTab = 0; fe.rebinding = (int)Action::Pickaxe; }
@@ -131,11 +133,14 @@ struct Demo {
         if (f == 44) pendingShot = "03b_settings_graphics.bmp";
         if (f == 45) {
             fe.settings.kbucks = 2500;                 // show off the locker with a couple of skins
-            fe.settings.ownedSkins |= 1u << 2;
-            fe.settings.equippedSkin = 2;
-            fe.screen = Screen::Locker; fe.lockerSel = 4;
+            fe.settings.ownedSkins.add(2);
+            fe.settings.ownedSkins.add(64);            // MAGMA CORE: glowing cracks (emission FX)
+            fe.settings.equippedSkin = 64;
+            fe.screen = Screen::Locker; fe.lockerSel = 64;
         }
+        if (f == 47) fe.settings.characterStyle = 1;   // Realistic for the locker photo
         if (f == 48) pendingShot = "03c_locker.bmp";
+        if (f == 49) fe.settings.characterStyle = 0;
         if (f == 49) { fe.screen = Screen::Lobby; fe.invite("JUNO"); }
         if (f == 50) fe.startMatch();
         if (f > 50 && f < 60) { g.player.pitch = -1.0f; g.player.yaw += 0.03f; }  // looking down at the roof deck
@@ -462,6 +467,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
     }
 
     FrontEnd fe;
+    // K-Bucks store: real HTTPS requests and the browser for Stripe Checkout.
+    fe.storeTransport = winHttpRequest;
+    fe.openUrl = openInBrowser;
     fe.init(demoMode ? demo.dir + "\\demo_settings.ini" : settingsPath());
     SceneList scene;
     HudBuilder hud;

@@ -836,6 +836,50 @@ def paint_textures(body, only=None):
             region(shirt_area & torso & bolt, accent, 1)
         elif pattern == 13:  # panelled jacket
             region(shirt_area & torso & ((np.abs(X) > 0.2) | (Z > 1.5)), shirt * 0.6)
+        clothes = shirt_area | leg
+        if pattern == 14:  # energy cracks: a jagged network over top and trousers, trim colour (glows on FX skins)
+            def crack_field(sc, ox):
+                # Distance to the nearest edge between random cells (Voronoi), seeded by position.
+                gx, gz, gy = X * sc + ox, Z * sc, Y * sc
+                ix, iz = np.floor(gx), np.floor(gz)
+                best = np.full(len(X), 9.0); second_ = np.full(len(X), 9.0)
+                for dx_ in (-1, 0, 1):
+                    for dz_ in (-1, 0, 1):
+                        cx_, cz_ = ix + dx_, iz + dz_
+                        h = np.sin(cx_ * 127.1 + cz_ * 311.7) * 43758.5453
+                        jx = h - np.floor(h)
+                        h2 = np.sin(cx_ * 269.5 + cz_ * 183.3) * 43758.5453
+                        jz = h2 - np.floor(h2)
+                        d = np.sqrt((gx - cx_ - jx) ** 2 + (gz - cz_ - jz) ** 2 + (gy * 0.3) ** 2 * 0.0)
+                        second_ = np.where(d < best, best, np.minimum(second_, d))
+                        best = np.minimum(best, d)
+                return second_ - best
+            f = np.minimum(crack_field(9.0, 0.0), crack_field(23.0, 5.0) * 1.6)
+            region(clothes & (f < 0.07), accent * 0.75, 1)
+            region(clothes & (f < 0.035), np.clip(accent * 1.15 + 0.1, 0, 1), 1)
+        elif pattern == 15:  # circuit traces: straight lines with right-angle turns and solder pads
+            gx, gz = X * 40, Z * 40
+            lineX = (np.abs(gx - np.round(gx)) < 0.06) & (np.sin(np.round(gx) * 3.7 + np.floor(gz * 0.5) * 1.3) > 0.2)
+            lineZ = (np.abs(gz - np.round(gz)) < 0.06) & (np.sin(np.round(gz) * 2.9 + np.floor(gx * 0.5) * 1.7) > 0.4)
+            pads = ((gx - np.round(gx)) ** 2 + (gz - np.round(gz)) ** 2 < 0.04) & (np.sin(np.round(gx) * 5.1 + np.round(gz) * 7.3) > 0.6)
+            region(clothes & (lineX | lineZ), accent * 0.85, 1)
+            region(clothes & pads, np.clip(accent * 1.2 + 0.1, 0, 1), 1)
+        elif pattern == 16:  # tiger stripes: wavy tapered bands
+            w_ = np.sin(Z * 38 + np.sin(X * 25 + Y * 18) * 1.8) * (0.6 + 0.4 * np.sin(X * 11 + Y * 9))
+            region(clothes & (w_ > 0.55), accent, 0)
+        elif pattern == 17:  # gradient: fades from the main colour at the shoulders to the trim colour at the feet
+            k = np.clip((1.55 - Z) / 1.4, 0, 1)[:, None]
+            g = shirt * (1 - k) + accent * k
+            region(shirt_area, g[shirt_area])
+            gp = pants * (1 - k) + accent * k * 0.8
+            region(leg & (Z > 0.31), gp[leg & (Z > 0.31)])
+        elif pattern == 18:  # pixel camo: blocky squares in three tones
+            px_ = np.floor(X * 30) + np.floor(Y * 30) * 7.0
+            pz_ = np.floor(Z * 30)
+            h = np.sin(px_ * 12.9898 + pz_ * 78.233) * 43758.5453
+            r_ = h - np.floor(h)
+            region(clothes & (r_ < 0.22), accent, 1)
+            region(clothes & (r_ > 0.78), shirt * 0.55)
 
         # Tailoring on the top: darker side panels, a lighter front panel that narrows to the waist
         # (piped in the trim colour), a raised collar and ribbed cuffs.

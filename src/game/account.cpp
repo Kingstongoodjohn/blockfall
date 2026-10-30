@@ -31,11 +31,13 @@ std::string Account::serialize() const {
     o << "name=" << name << "\n";
     o << "pass=" << passHash << "\n";
     o << "kbucks=" << kbucks << "\n";
-    o << "skins=" << ownedSkins << "\n";
+    o << "skins=" << ownedSkins.low() << "\n";
+    o << "skins2=" << ownedSkins.high() << "\n";
     o << "skin=" << equippedSkin << "\n";
     o << "matches=" << matches << "\n";
     o << "wins=" << wins << "\n";
     o << "kills=" << kills << "\n";
+    for (const std::string& pu : purchases) o << "purchase=" << pu << "\n";
     return o.str();
 }
 
@@ -51,11 +53,13 @@ void Account::parse(const std::string& text) {
         if (k == "name") name = cleanAccountName(v);
         else if (k == "pass") passHash = std::strtoull(v.c_str(), nullptr, 10);
         else if (k == "kbucks") kbucks = std::max(0, std::atoi(v.c_str()));
-        else if (k == "skins") ownedSkins = (uint64_t)std::strtoull(v.c_str(), nullptr, 10) | 1ull;
+        else if (k == "skins") ownedSkins.setLow(v);
+        else if (k == "skins2") ownedSkins.setHigh(v);
         else if (k == "skin") equippedSkin = std::max(0, std::atoi(v.c_str()));
         else if (k == "matches") matches = std::atoi(v.c_str());
         else if (k == "wins") wins = std::atoi(v.c_str());
         else if (k == "kills") kills = std::atoi(v.c_str());
+        else if (k == "purchase" && purchases.size() < 64) purchases.push_back(v);
     }
 }
 

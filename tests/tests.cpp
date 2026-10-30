@@ -6,6 +6,8 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <map>
+#include <filesystem>
 #include "game/game.h"
 #include "game/hud.h"
 #include "game/loot.h"
@@ -22,6 +24,7 @@
 #include "game/charface.h"
 #include "game/charphys.h"
 #include "game/account.h"
+#include "game/store.h"
 #include <cstdlib>
 #include <fstream>
 
@@ -1893,7 +1896,7 @@ static void testLocker() {
     fe.frame(click(px + pw - 170 * u + 60, py + 92 + 20), DT, 1600, 900, 60, scene, hud);  // EQUIP on row 0 (RECRUIT)
     CHECK(fe.settings.equippedSkin == 0, "locker equips an owned skin");
     fe.settings.equippedSkin = pick;
-    fe.settings.ownedSkins |= 1ull << 1;  // for the checks below
+    fe.settings.ownedSkins.add(1);  // for the checks below
     fe.settings.equippedSkin = 1;
     Settings ld;
     ld.parse(fe.settings.serialize());
@@ -1968,14 +1971,15 @@ static void testAccounts() {
     CHECK(hashPassword("KINGSTON", "secret1") != hashPassword("KINGSTON", "secret2") && a.serialize().find("secret1") == std::string::npos,
           "the password itself is never stored");
     a.kbucks = 2500;
-    a.ownedSkins = 1ull | (1ull << 4);
+    a.ownedSkins.add(4);
+    a.ownedSkins.add(90);   // past 64: the second word
     a.equippedSkin = 4;
     a.kills = 7;
     store.save(a);
     Account c;
     c.parse(a.serialize());
     CHECK(c.kbucks == 2500 && c.ownedSkins == a.ownedSkins && c.equippedSkin == 4 && c.kills == 7 && c.passHash == a.passHash, "account file round-trips");
-    CHECK(store.signIn("KINGSTON", "secret1", b, err) && b.kbucks == 2500 && ((b.ownedSkins >> 4) & 1u), "signing in brings the K-Bucks and skins back");
+    CHECK(store.signIn("KINGSTON", "secret1", b, err) && b.kbucks == 2500 && b.ownedSkins.has(4) && b.ownedSkins.has(90) && !b.ownedSkins.has(5), "signing in brings the K-Bucks and skins back");
 
     // Through the front end: a fresh install asks you to sign in; buying saves to the account;
     // signing out and back in keeps everything.
@@ -2851,6 +2855,156 @@ static void testOcclusion() {
     }
 }
 
+static void testNewSkins() {
+    section("Skins: 94, owned-skin bits past 64, emission FX");
+    CHECK(skinCount() >= 94 && skinCount() <= MAX_SKINS, "%d skins (room for %d)", skinCount(), MAX_SKINS);
+    int fx = 0, eyes = 0;
+    bool fxValid = true;
+    for (int i = 0; i < skinCount(); ++i) {
+        const Skin& k = skinAt(i);
+        if (k.fx & SKIN_FX_TRIM) ++fx;
+        if (k.fx & SKIN_FX_EYES) ++eyes;
+        fxValid = fxValid && (k.fx & ~(SKIN_FX_TRIM | SKIN_FX_EYES)) == 0 && k.pattern >= 0 && k.pattern <= 18;
+    }
+    CHECK(fx >= 10 && eyes >= 5 && fxValid, "%d skins with glowing trim, %d with glowing eyes", fx, eyes);
+    // Owning a skin past 64 survives a save and load (old files without "skins2=" still load).
+    Settings st;
+    st.ownedSkins.add(93);
+    st.ownedSkins.add(3);
+    Settings back;
+    back.parse(st.serialize());
+    CHECK(back.ownsSkin(93) && back.ownsSkin(3) && back.ownsSkin(0) && !back.ownsSkin(92), "skin 93 stays owned after save/load");
+    Settings old;
+    old.parse("skins=9\n");
+    CHECK(old.ownsSkin(0) && old.ownsSkin(3) && !old.ownsSkin(64), "an old settings file (skins 0-63 only) still loads");
+    // The renderer is told which characters glow.
+    Game g;
+    g.reset(3);
+    for (Bot& b : g.bots) b.skin = 64;   // MAGMA CORE: glowing cracks and eyes
+    g.landEveryone();
+    for (int i = 0; i < 5; ++i) g.update(InputState(), DT);
+    SceneList scene;
+    buildScene(g, 16.0f / 9.0f, scene);
+    bool glow = false;
+    for (const CharacterDraw& c : scene.characters) glow = glow || (c.fx == (SKIN_FX_TRIM | SKIN_FX_EYES));
+    if (characterModel()) CHECK(glow, "glowing skins reach the renderer");
+}
+
+// A pretend payment server speaking the same protocol as server/payments/app.py.
+struct FakePayServer {
+    struct P { std::string token; int kbucks; std::string status; };
+    std::map<std::string, P> purchases;
+    int next = 1, claims = 0;
+    bool online = true;
+    HttpResponse handle(const HttpRequest& r) {
+        if (!online) return {0, "", "offline"};
+        if (r.method == "POST" && r.url.find("/checkout") != std::string::npos) {
+            std::string pack = jsonString(r.body, "pack");
+            int kb = 0;
+            for (const KBucksPack& p : KBUCKS_PACKS) if (pack == p.id) kb = p.kbucks;
+            if (!kb || jsonString(r.body, "account").empty()) return {400, "{\"detail\": \"bad\"}", ""};
+            std::string id = "p" + std::to_string(next++), tok = "tok" + id + "secret";
+            purchases[id] = {tok, kb, "pending"};
+            return {200, "{\"purchase\": \"" + id + "\", \"token\": \"" + tok + "\", \"url\": \"https://checkout.stripe.com/c/pay/cs_" + id +
+                             "\", \"kbucks\": " + std::to_string(kb) + "}", ""};
+        }
+        size_t at = r.url.find("/purchase/");
+        if (at == std::string::npos) return {404, "", ""};
+        std::string rest = r.url.substr(at + 10);
+        std::string id = rest.substr(0, rest.find_first_of("/?"));
+        auto it = purchases.find(id);
+        if (it == purchases.end()) return {404, "{}", ""};
+        if (r.method == "GET") {
+            if (rest.find("token=" + it->second.token) == std::string::npos) return {404, "{}", ""};
+            return {200, "{\"status\": \"" + it->second.status + "\", \"kbucks\": " + std::to_string(it->second.kbucks) + "}", ""};
+        }
+        if (jsonString(r.body, "token") != it->second.token) return {404, "{}", ""};
+        if (it->second.status == "claimed") return {409, "{}", ""};
+        if (it->second.status != "paid") return {402, "{}", ""};
+        it->second.status = "claimed";
+        ++claims;
+        return {200, "{\"kbucks\": " + std::to_string(it->second.kbucks) + "}", ""};
+    }
+};
+
+static void testKBucksStore() {
+    section("K-Bucks store (Stripe through the payment server)");
+    CHECK(KBUCKS_PACK_COUNT == 4 && KBUCKS_PACKS[0].kbucks == 1000 && KBUCKS_PACKS[0].cents == 799 && KBUCKS_PACKS[1].cents == 1999 &&
+          KBUCKS_PACKS[2].cents == 3199 && KBUCKS_PACKS[3].kbucks == 13500 && KBUCKS_PACKS[3].cents == 7999,
+          "packs at the old V-Bucks prices");
+    CHECK(formatPrice(799) == "$7.99" && formatPrice(7999) == "$79.99" && formatKBucks(13500) == "13,500", "prices and amounts print right");
+    CHECK(jsonString("{\"url\": \"https://x/y\", \"n\": 12}", "url") == "https://x/y" && jsonInt("{\"url\": \"a\", \"n\": 12}", "n") == 12,
+          "reads the server's JSON");
+
+    std::string dir = "test_store_tmp";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    FakePayServer server;
+    std::string opened;
+    auto makeFe = [&](FrontEnd& fe) {
+        fe.storeTransport = [&](const HttpRequest& r) { return server.handle(r); };
+        fe.openUrl = [&](const std::string& u) { opened = u; };
+        fe.storeAsync = false;
+        fe.settings.storeUrl = "https://pay.example";
+        if (!std::filesystem::exists(dir + "/settings.ini")) std::ofstream(dir + "/settings.ini") << "store=https://pay.example\n";
+        fe.init(dir + "/settings.ini");
+    };
+    {
+        FrontEnd fe;
+        makeFe(fe);
+        std::string err;
+        CHECK(fe.createAccount("BUYER", "secret1", err), "account for buying (%s)", err.c_str());
+        int before = fe.settings.kbucks;
+        CHECK(fe.store().configured() && fe.store().buy(fe.account.name, 1), "buying 2,800 K-Bucks starts a checkout");
+        SceneList scene;
+        HudBuilder hud;
+        fe.screen = Screen::KBucks;
+        fe.frame(RawInput(), DT, 1600, 900, 60, scene, hud);
+        CHECK(opened.rfind("https://checkout.stripe.com/", 0) == 0, "the Stripe page opens in the browser");
+        CHECK(fe.store().state() == StoreClient::State::WaitingForPayment && fe.pending.size() == 1, "waiting for the payment");
+        Account saved;
+        fe.accounts.signInRaw("BUYER", saved);
+        CHECK(saved.purchases.size() == 1, "the unfinished purchase is saved in the account file");
+        for (int i = 0; i < 300; ++i) fe.frame(RawInput(), DT, 1600, 900, 60, scene, hud);
+        CHECK(fe.settings.kbucks == before, "nothing is added before Stripe says it's paid");
+        server.purchases.begin()->second.status = "paid";     // the player paid on Stripe
+        for (int i = 0; i < 300 && fe.settings.kbucks == before; ++i) fe.frame(RawInput(), DT, 1600, 900, 60, scene, hud);
+        CHECK(fe.settings.kbucks == before + 2800 && fe.pending.empty() && server.claims == 1, "paid: +2,800 K-Bucks, claimed once (%d)", fe.settings.kbucks);
+        for (int i = 0; i < 300; ++i) fe.frame(RawInput(), DT, 1600, 900, 60, scene, hud);
+        CHECK(fe.settings.kbucks == before + 2800 && server.claims == 1, "never added twice");
+        fe.accounts.signInRaw("BUYER", saved);
+        CHECK(saved.kbucks == before + 2800 && saved.purchases.empty(), "the account file has the K-Bucks and no pending purchase");
+
+        // Closing the game while a purchase is open: it is picked up on the next start.
+        fe.store().buy(fe.account.name, 0);
+        fe.frame(RawInput(), DT, 1600, 900, 60, scene, hud);
+        CHECK(fe.pending.size() == 1, "second purchase waiting");
+    }
+    for (auto& kv : server.purchases)
+        if (kv.second.status == "pending") kv.second.status = "paid";
+    {
+        FrontEnd fe;
+        makeFe(fe);
+        CHECK(fe.signedIn && fe.pending.size() == 1, "after a restart the unfinished purchase is still known");
+        int before = fe.settings.kbucks;
+        SceneList scene;
+        HudBuilder hud;
+        for (int i = 0; i < 1200 && fe.settings.kbucks == before; ++i) fe.frame(RawInput(), DT, 1600, 900, 60, scene, hud);
+        CHECK(fe.settings.kbucks == before + 1000 && fe.pending.empty(), "...and its 1,000 K-Bucks arrive once it's paid");
+        // No server reachable: a clear message, nothing charged or added.
+        server.online = false;
+        fe.store().buy(fe.account.name, 3);
+        fe.frame(RawInput(), DT, 1600, 900, 60, scene, hud);
+        CHECK(fe.store().state() == StoreClient::State::Failed && fe.pending.empty(), "offline: the purchase doesn't start (%s)", fe.store().status().c_str());
+    }
+    {
+        FrontEnd fe;
+        fe.storeAsync = false;
+        CHECK(!fe.store().configured() && !fe.store().buy("X", 0), "no server address: the store says it isn't set up");
+    }
+    std::filesystem::remove_all(dir);
+}
+
 static void testPerformance() {
     section("Performance (CPU side of one frame)");
     Game g;
@@ -2912,6 +3066,8 @@ int main() {
     testSecondaryMotion();
     testOutfits();
     testOcclusion();
+    testNewSkins();
+    testKBucksStore();
     testPerformance();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

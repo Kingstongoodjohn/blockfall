@@ -114,9 +114,11 @@ std::string Settings::serialize() const {
     o << "volume=" << volume << "\n";
     o << "charstyle=" << characterStyle << "\n";
     o << "kbucks=" << kbucks << "\n";
-    o << "skins=" << ownedSkins << "\n";
+    o << "skins=" << ownedSkins.low() << "\n";
+    o << "skins2=" << ownedSkins.high() << "\n";
     o << "skin=" << equippedSkin << "\n";
     o << "account=" << account << "\n";
+    if (!storeUrl.empty()) o << "store=" << storeUrl << "\n";
     for (int i = 0; i < (int)GfxOption::Count; ++i) o << "gfx." << i << "=" << gfx.level[i] << "\n";
     for (int i = 0; i < (int)Action::Count; ++i) {
         o << "bind." << bindKey((Action)i) << "=" << binds.key[i][0] << "\n";
@@ -159,9 +161,13 @@ void Settings::parse(const std::string& text) {
         } else if (k == "kbucks") {
             kbucks = std::max(0, std::atoi(v.c_str()));
         } else if (k == "skins") {
-            ownedSkins = (uint64_t)std::strtoull(v.c_str(), nullptr, 10) | 1ull;
+            ownedSkins.setLow(v);
+        } else if (k == "skins2") {
+            ownedSkins.setHigh(v);
         } else if (k == "skin") {
             equippedSkin = std::max(0, std::atoi(v.c_str()));
+        } else if (k == "store") {
+            storeUrl = v;
         } else if (k == "account") {
             account = cleanName(v);
         } else if (k.compare(0, 4, "gfx.") == 0) {

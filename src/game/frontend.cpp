@@ -41,6 +41,7 @@ void FrontEnd::init(const std::string& settingsPath) {
                 settings.kbucks = a.kbucks;
                 settings.ownedSkins = a.ownedSkins;
                 settings.equippedSkin = a.equippedSkin;
+                resetStore();
             }
         }
         if (!signedIn) {
@@ -57,6 +58,8 @@ void FrontEnd::save() {
         account.kbucks = settings.kbucks;
         account.ownedSkins = settings.ownedSkins;
         account.equippedSkin = settings.equippedSkin;
+        account.purchases.clear();
+        for (const PendingPurchase& p : pending) account.purchases.push_back(p.save());
         accounts.save(account);
     }
     if (!settingsPath_.empty()) settings.save(settingsPath_);
@@ -73,6 +76,7 @@ bool FrontEnd::signIn(const std::string& name, const std::string& password, std:
     settings.ownedSkins = a.ownedSkins;
     settings.equippedSkin = a.equippedSkin;
     nameInput_ = a.name;
+    resetStore();
     save();
     return true;
 }
@@ -89,17 +93,20 @@ bool FrontEnd::createAccount(const std::string& name, const std::string& passwor
     settings.account = a.name;
     settings.playerName = a.name;
     nameInput_ = a.name;
+    resetStore();
     save();
     return true;
 }
 
 void FrontEnd::signOut() {
     save();
+    store_.reset();       // a purchase in progress belongs to the account that started it
+    pending.clear();
     signedIn = false;
     account = Account();
     settings.account.clear();
     settings.kbucks = 0;
-    settings.ownedSkins = 1;
+    settings.ownedSkins = SkinSet();
     settings.equippedSkin = 0;
     if (!settingsPath_.empty()) settings.save(settingsPath_);
     signPass_.clear();
@@ -287,6 +294,7 @@ void FrontEnd::frame(const RawInput& in, float dt, float W, float H, float fps, 
     ui_ = std::max(0.7f, H / 900.0f);
     time_ += dt;
     messageTime = std::max(0.0f, messageTime - dt);
+    updateStore(dt);
 
     // Waiting for a key to bind? Take the first key or mouse button pressed.
     if (rebinding >= 0) {
@@ -324,6 +332,7 @@ void FrontEnd::frame(const RawInput& in, float dt, float W, float H, float fps, 
             case Screen::Friends: screen = Screen::Lobby; break;
             case Screen::Locker: screen = Screen::Lobby; break;
             case Screen::Shop: screen = Screen::Lobby; break;
+            case Screen::KBucks: screen = Screen::Shop; break;
             case Screen::Settings: screen = settingsFromPause_ ? Screen::Paused : Screen::Lobby; save(); break;
             default: break;
         }
@@ -417,6 +426,7 @@ void FrontEnd::frame(const RawInput& in, float dt, float W, float H, float fps, 
         case Screen::Map: mapScreen(); break;
         case Screen::Locker: lockerScreen(); break;
         case Screen::Shop: shopScreen(); break;
+        case Screen::KBucks: kbucksScreen(); break;
         case Screen::SignIn: signInScreen(); break;
         default: break;
     }
@@ -1049,6 +1059,78 @@ void FrontEnd::lockerScreen() {
     if (button("BACK", px + 24 * u, py + ph - 56 * u, 200 * u, 44 * u)) screen = Screen::Lobby;
 }
 
+// ------------------------------------------------------------------ K-Bucks store
+std::string FrontEnd::storeUrl() const { return settings.storeUrl.empty() ? std::string(STORE_DEFAULT_URL) : settings.storeUrl; }
+
+StoreClient& FrontEnd::store() {
+    if (!store_) {
+        store_.reset(new StoreClient());
+        store_->setServer(storeUrl());
+        store_->setTransport(storeTransport);
+        store_->setAsync(storeAsync);
+        store_->openUrl = openUrl;
+    }
+    return *store_;
+}
+
+// A new account is signed in: watch its own unfinished purchases.
+void FrontEnd::resetStore() {
+    store_.reset();
+    pending.clear();
+    for (const std::string& line : account.purchases) {
+        PendingPurchase p;
+        if (PendingPurchase::load(line, p)) pending.push_back(p);
+    }
+    if (!pending.empty()) store().resume({});
+}
+
+void FrontEnd::updateStore(float dt) {
+    if (!signedIn || (!store_ && pending.empty())) return;
+    size_t before = pending.size();
+    int credited = 0;
+    store().update(dt, credited, pending);
+    if (credited > 0) {
+        settings.kbucks += credited;
+        notify("+" + formatKBucks(credited) + " K-BUCKS ADDED");
+    }
+    if (credited > 0 || pending.size() != before) save();
+}
+
+void FrontEnd::kbucksScreen() {
+    float u = ui_;
+    float pw = 560 * u, ph = H_ - 100 * u;
+    float px = 40 * u, py = 50 * u;
+    panel(px, py, pw, ph);
+    hud_->text(px + 24 * u, py + 20 * u, 3.0f * u, WHITE, "GET K-BUCKS");
+    hud_->text(px + pw - 24 * u, py + 26 * u, 2.0f * u, Vec4(0.5f, 0.95f, 0.6f, 1), formatKBucks(settings.kbucks) + " K-BUCKS", 2);
+    hud_->text(px + 24 * u, py + 58 * u, 1.3f * u, DIM, "PAY SAFELY ON STRIPE'S CHECKOUT PAGE IN YOUR BROWSER. THE K-BUCKS ARRIVE A FEW SECONDS AFTER.");
+    StoreClient& st = store();
+    float y = py + 96 * u, rowH = 74 * u;
+    for (int i = 0; i < KBUCKS_PACK_COUNT; ++i) {
+        const KBucksPack& pk = KBUCKS_PACKS[i];
+        hud_->rect(px + 24 * u, y, pw - 48 * u, rowH - 10 * u, Vec4(0.1f, 0.13f, 0.22f, 0.85f));
+        hud_->text(px + 44 * u, y + 12 * u, 2.6f * u, Vec4(1.0f, 0.82f, 0.3f, 1), formatKBucks(pk.kbucks));
+        hud_->text(px + 44 * u, y + 40 * u, 1.3f * u, DIM, "K-BUCKS");
+        hud_->text(px + pw - 220 * u, y + 20 * u, 2.2f * u, WHITE, formatPrice(pk.cents), 2);
+        bool can = st.configured() && !st.busy() && signedIn;
+        if (button("BUY", px + pw - 196 * u, y + 10 * u, 150 * u, rowH - 30 * u, can, can)) {
+            if (st.buy(account.name, i)) notify("OPENING CHECKOUT FOR " + formatKBucks(pk.kbucks) + " K-BUCKS");
+        }
+        y += rowH;
+    }
+    y += 8 * u;
+    std::string line = !st.configured() ? std::string("THE STORE ISN'T SET UP YET (SEE server/payments/README.md)") : st.status();
+    if (!signedIn) line = "SIGN IN TO BUY K-BUCKS";
+    if (!line.empty()) hud_->text(px + 24 * u, y, 1.5f * u, st.state() == StoreClient::State::Failed ? Vec4(1, 0.5f, 0.4f, 1) : ACCENT, line);
+    if (!pending.empty() && st.state() != StoreClient::State::WaitingForPayment)
+        hud_->text(px + 24 * u, y + 24 * u, 1.3f * u, DIM, std::to_string(pending.size()) + " PURCHASE(S) STILL WAITING FOR PAYMENT - CHECKED AUTOMATICALLY");
+    if (st.state() == StoreClient::State::WaitingForPayment &&
+        button("STOP WAITING", px + 24 * u, y + 34 * u, 220 * u, 40 * u))
+        st.stopWaiting();
+    hud_->text(px + 24 * u, py + ph - 96 * u, 1.2f * u, DIM, "PRICES IN US DOLLARS. PURCHASES ARE FINAL ONCE THE K-BUCKS ARE ADDED.");
+    if (button("BACK", px + 24 * u, py + ph - 60 * u, 200 * u, 44 * u)) screen = Screen::Shop;
+}
+
 void FrontEnd::shopScreen() {
     float u = ui_;
     float pw = 520 * u, ph = H_ - 100 * u;
@@ -1072,7 +1154,7 @@ void FrontEnd::shopScreen() {
             bool canBuy = settings.kbucks >= price;
             if (button("BUY", px + pw - 170 * u, ry + 6 * u, 136 * u, rowH - 20 * u, canBuy, canBuy)) {
                 settings.kbucks -= price;
-                settings.ownedSkins |= 1ull << i;
+                settings.ownedSkins.add(i);
                 settings.equippedSkin = i;
                 save();
                 notify(std::string("BOUGHT ") + sk.name + " FOR " + std::to_string(price) + " K-BUCKS");
@@ -1089,6 +1171,7 @@ void FrontEnd::shopScreen() {
     for (size_t n = 2; n < lineup.size(); ++n) { buyRow(lineup[n], y); y += rowH; }
     hud_->text(px + 24 * u, py + ph - 76 * u, 1.3f * u, DIM, "CLICK A SKIN TO PREVIEW IT ON THE STAGE.");
     if (button("BACK", px + 24 * u, py + ph - 52 * u, 200 * u, 44 * u)) screen = Screen::Lobby;
+    if (button("GET K-BUCKS", px + pw - 224 * u, py + ph - 52 * u, 200 * u, 44 * u, true)) screen = Screen::KBucks;
 }
 
 void FrontEnd::matchEndScreen() {

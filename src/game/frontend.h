@@ -9,6 +9,9 @@
 #include "scene.h"
 #include "settings.h"
 #include "account.h"
+#include "store.h"
+#include <functional>
+#include <memory>
 
 namespace bf {
 
@@ -23,7 +26,7 @@ struct RawInput {
     bool focusLost = false;
 };
 
-enum class Screen : int { Lobby = 0, Friends, Settings, InGame, Paused, MatchEnd, Inventory, Map, Locker, Shop, SignIn };
+enum class Screen : int { Lobby = 0, Friends, Settings, InGame, Paused, MatchEnd, Inventory, Map, Locker, Shop, SignIn, KBucks };
 
 constexpr int MAX_PARTY = 3;  // you + 3 friends = a squad
 
@@ -74,6 +77,15 @@ public:
     bool shopDaily(int skin, long day) const;
     std::vector<int> shopLineup(long day) const;   // featured first, then daily
     long shopDay = 0;   // which day's rotation to show (0 = use the real clock)
+
+    // The K-Bucks store (real money through Stripe, see store.h). The platform plugs in the
+    // network and the browser before the first frame.
+    HttpTransport storeTransport;
+    std::function<void(const std::string&)> openUrl;
+    bool storeAsync = true;
+    StoreClient& store();
+    std::string storeUrl() const;
+    std::vector<PendingPurchase> pending;   // this account's purchases waiting to be claimed
     int lockerPage = 0;
 
 private:
@@ -94,6 +106,9 @@ private:
     void lockerScreen();
     void shopScreen();
     void signInScreen();
+    void kbucksScreen();
+    void updateStore(float dt);
+    void resetStore();
     void creditKills();
     void graphicsTab(float px, float py, float pw, float ph);
     void controlsTab(float px, float py, float pw, float ph);
@@ -111,6 +126,7 @@ private:
     std::string friendInput_;
     std::string nameInput_;
     uint64_t nextSeed_ = 1337;
+    std::unique_ptr<StoreClient> store_;
 };
 
 }  // namespace bf

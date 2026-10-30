@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include "keybinds.h"
+#include "skinset.h"
 
 namespace bf {
 
@@ -39,10 +40,11 @@ struct Settings {
     Bindings binds = Bindings::defaults();
     std::vector<std::string> friends;
     int kbucks = 0;
-    uint64_t ownedSkins = 1;   // bit per skin; skin 0 is free
+    SkinSet ownedSkins;        // bit per skin; skin 0 is free
     int equippedSkin = 0;
     std::string account;       // name of the signed-in account (empty = not signed in)
-    bool ownsSkin(int i) const { return i >= 0 && i < 64 && ((ownedSkins >> i) & 1ull); }
+    std::string storeUrl;      // K-Bucks payment server (empty = STORE_DEFAULT_URL in store.h)
+    bool ownsSkin(int i) const { return ownedSkins.has(i); }
 
     std::string serialize() const;
     // Reads what serialize() wrote. Unknown or broken lines are skipped.
