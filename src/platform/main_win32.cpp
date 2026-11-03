@@ -10,6 +10,7 @@
 #include "../game/skins.h"
 #include "audio_xaudio2.h"
 #include "http_win32.h"
+#include "shortcut_win32.h"
 #include "input_win32.h"
 #include "renderer_d3d11.h"
 
@@ -471,6 +472,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int) {
     fe.storeTransport = winHttpRequest;
     fe.openUrl = openInBrowser;
     fe.init(demoMode ? demo.dir + "\\demo_settings.ini" : settingsPath());
+    // First start: put a Blockfall shortcut (with the B icon) on the desktop. Only once, so a
+    // shortcut you delete stays deleted.
+    if (!demoMode && !fe.settings.desktopShortcut && createDesktopShortcut()) {
+        fe.settings.desktopShortcut = true;
+        fe.settings.save(settingsPath());
+    }
     SceneList scene;
     HudBuilder hud;
     std::vector<uint32_t> mapImage;

@@ -58,10 +58,11 @@ if(WIN32)
         src/platform/renderer_d3d11.cpp
         src/platform/audio_xaudio2.cpp
         src/platform/http_win32.cpp     # K-Bucks store: WinHTTP + opening the browser
+        src/platform/shortcut_win32.cpp # desktop shortcut on first start
         src/platform/res/blockfall.rc   # icon, version details, app manifest
     )
     # XAudio2 itself is loaded at runtime (no import library); ole32 is for CoInitializeEx.
-    target_link_libraries(Blockfall PRIVATE blockfall_core d3d11 dxgi d3dcompiler gdi32 ole32 winhttp shell32)
+    target_link_libraries(Blockfall PRIVATE blockfall_core d3d11 dxgi d3dcompiler gdi32 ole32 winhttp shell32 uuid)
     if(MSVC)
         target_compile_options(Blockfall PRIVATE /W4 /permissive-)
         set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Blockfall)

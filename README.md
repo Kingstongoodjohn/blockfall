@@ -11,23 +11,28 @@ Keep the `assets` folder next to `bin` - that's where the character model and sk
 
 ### If Windows says it's a virus or blocks it
 
-It's a false alarm: the game isn't signed with a paid code-signing certificate, and Windows treats
-any new unsigned download as risky until enough people have run it.
+It's a false alarm. The game isn't **signed** yet, and Windows treats any new unsigned download as
+risky. Nobody can promise an unsigned exe never gets flagged; signing is the real fix, and it's
+ready to switch on (see [docs/code-signing.md](docs/code-signing.md): Azure Artifact Signing,
+US$9.99/month, open to individuals in Canada).
+
+Meanwhile, `bin/Blockfall.exe` is built on GitHub with Microsoft's own compiler (MSVC), which
+antivirus guess-checks flag less often, and it carries its name, version, publisher, icon and an
+app manifest.
 
 - **Blue box "Windows protected your PC"** (SmartScreen): click **More info**, then **Run anyway**.
-- **Windows Security says it found a threat** (Defender): open **Windows Security → Virus & threat
-  protection → Protection history**, pick the Blockfall entry, choose **Allow on device**. Then
-  send `bin\Blockfall.exe` to Microsoft as a false positive at
-  <https://www.microsoft.com/wdsi/filesubmission> (choose "Home customer", "Incorrectly detected
-  as malware"). Microsoft usually clears it in a few days, and then Defender stops flagging it for
-  everyone.
-- **"Smart App Control blocked part of this app"** (Windows 11): Smart App Control blocks every
-  unsigned app and has no "run anyway". It can be turned off in **Windows Security → App & browser
-  control → Smart App Control**, but Windows won't let you turn it back on without a reinstall, so
-  that's your call.
+- **Windows Security says it found a threat** (Defender): **Windows Security → Virus & threat
+  protection → Protection history**, pick the Blockfall entry, choose **Allow on device**, and
+  send `bin\Blockfall.exe` to <https://www.microsoft.com/wdsi/filesubmission> ("Incorrectly
+  detected as malware").
+- **"Smart App Control blocked part of this app"** (Windows 11): it blocks every unsigned app
+  and has no "run anyway". Signing fixes it. (It can be turned off in **Windows Security → App &
+  browser control → Smart App Control**, but Windows won't let you turn it back on without a
+  reinstall.)
 
-The exe carries its name, version, publisher and an app manifest, which keeps the guessing
-checks calmer. Only signing the exe with a code-signing certificate removes these warnings for good.
+### Desktop shortcut
+The first time you start the game it puts a **Blockfall** shortcut with the game's B icon on
+your desktop. Delete it and it stays deleted.
 
 ## What's new in v16 - 30 new skins with glowing FX, and a K-Bucks store
 

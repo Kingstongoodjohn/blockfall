@@ -44,6 +44,7 @@ struct Settings {
     int equippedSkin = 0;
     std::string account;       // name of the signed-in account (empty = not signed in)
     std::string storeUrl;      // K-Bucks payment server (empty = STORE_DEFAULT_URL in store.h)
+    bool desktopShortcut = false;  // the desktop shortcut was made once (not again if you delete it)
     bool ownsSkin(int i) const { return ownedSkins.has(i); }
 
     std::string serialize() const;

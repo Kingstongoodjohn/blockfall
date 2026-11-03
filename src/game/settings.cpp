@@ -119,6 +119,7 @@ std::string Settings::serialize() const {
     o << "skin=" << equippedSkin << "\n";
     o << "account=" << account << "\n";
     if (!storeUrl.empty()) o << "store=" << storeUrl << "\n";
+    o << "shortcut=" << (desktopShortcut ? 1 : 0) << "\n";
     for (int i = 0; i < (int)GfxOption::Count; ++i) o << "gfx." << i << "=" << gfx.level[i] << "\n";
     for (int i = 0; i < (int)Action::Count; ++i) {
         o << "bind." << bindKey((Action)i) << "=" << binds.key[i][0] << "\n";
@@ -166,6 +167,8 @@ void Settings::parse(const std::string& text) {
             ownedSkins.setHigh(v);
         } else if (k == "skin") {
             equippedSkin = std::max(0, std::atoi(v.c_str()));
+        } else if (k == "shortcut") {
+            desktopShortcut = std::atoi(v.c_str()) != 0;
         } else if (k == "store") {
             storeUrl = v;
         } else if (k == "account") {
