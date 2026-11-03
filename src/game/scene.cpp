@@ -570,6 +570,13 @@ void addProp(SceneList& s, const World& w, const StaticBox& b) {
             s.opaque[MESH_CYLINDER].push_back(inst(Mat4::scale(Vec3(size.x * sc.x, size.y, size.z * sc.z)) * Mat4::translation(c), b.color, 0, MAT_STONE));
             s.opaque[MESH_CYLINDER].push_back(inst(Mat4::scale(Vec3(size.x * 0.7f, 0.2f, size.z * 0.7f)) * Mat4::translation(c + Vec3(0, size.y * 0.5f, 0)), Vec4(0.1f, 0.15f, 0.25f, 1), 0, MAT_DEFAULT));
             break;
+        case PropKind::Glass:
+            // See-through window pane.
+            s.transparent[MESH_CUBE].push_back(inst(Mat4::scale(size) * Mat4::translation(c), b.color, 0, MAT_METAL));
+            break;
+        case PropKind::Beacon:
+            s.opaque[MESH_SPHERE].push_back(inst(Mat4::scale(size) * Mat4::translation(c), b.color, 1.0f));
+            break;
         case PropKind::Log:
         case PropKind::Hay: {
             // Lying along x.
@@ -583,7 +590,7 @@ void addProp(SceneList& s, const World& w, const StaticBox& b) {
                 case PropKind::HouseRoof: mat = MAT_ROOF; break;
                 case PropKind::HouseFloor: case PropKind::Road: case PropKind::Stone: case PropKind::Step: mat = MAT_STONE; break;
                 case PropKind::Fence: case PropKind::Crate: case PropKind::Post: mat = MAT_WOOD; break;
-                case PropKind::Canopy: mat = MAT_METAL; break;
+                case PropKind::Canopy: case PropKind::Car: mat = MAT_METAL; break;
                 default: break;
             }
             s.opaque[MESH_CUBE].push_back(inst(Mat4::scale(Vec3(size.x * sc.x, size.y * sc.y, size.z * sc.z)) * Mat4::translation(c), b.color, 0, mat));

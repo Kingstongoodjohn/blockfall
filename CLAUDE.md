@@ -10,14 +10,16 @@ are local accounts that play as AI teammates. There is no online server.
 
 The player-facing feature list and controls live in `README.md`.
 
-**Status:** v16: 30 more skins (94) with emission FX and 5 new patterns, owned skins widened to
+**Status:** v17: downtown Cobble Cove (4 skyscrapers, mid-rises, avenues, lamps, cars), enterable
+high-rises (`World::buildHighRise`) at 5 places, breakable window glass, and a 16 m spatial grid
+for statics (`forStaticsIn`, DDA in `raycast`). v16: 30 more skins (94) with emission FX and 5 new patterns, owned skins widened to
 128 (`SkinSet`), and a real-money K-Bucks store (Stripe Checkout via `server/payments`, game
 client in `store.*`, WinHTTP in `src/platform/http_win32.*`). v15: leg-IK animations (planted feet, step-cycle jog/sprint/crouch-walk, strafing and
 backing up with turned legs), tailored outfit painting on all 64 skins, CPU occlusion culling,
 exe version info/icon/manifest. On top of v14 (outfit kit, hair cards, faces, Stylized/Realistic)
 and v13 (sound, bot pathfinding, wall edit rules). `bin/Blockfall.exe` is a v15 build (MinGW).
 `--mute` skips sound (for headless test machines; XAudio2 hangs under Wine).
-**Last updated:** 2026-10-30 (v16)
+**Last updated:** 2026-11-03 (v17)
 
 ## Stack
 - **C++17**, built with **CMake ≥ 3.16** and **MSVC** (Visual Studio 2022 Build Tools on this PC).
@@ -127,6 +129,22 @@ docs/decisions/  ADRs (NNNN-short-title.md)
   shadow pass); hidden characters get `CharacterDraw::shadowOnly`. Must stay conservative: a test
   checks every point it hides is blocked by a world raycast. `setOcclusionCulling(false)` turns it
   off. See ADR 0004.
+- **Places and buildings:** `World::generate` places 12 POIs (tests expect exactly 12); radius is
+  60 for the Town, 40 for Market/Depot/Village/Tower, 36 otherwise; the terrain is flattened inside
+  `radius - 6`. `buildPoi` builds each kind. `buildHighRise(c, halfX, halfZ, floors, doorSide, ...)`
+  makes a tall building: `HIGHRISE_FLOOR_H` (3.6 m) storeys, window bands (pillars `HouseWall`,
+  panes `PropKind::Glass`), 8 steps a floor up the inside of the +x wall (so the door can't be on
+  +x) and a slab hole over the stairs from the 4th step on. The hole must stay that long, or your
+  head hits the slab while the body's back edge is still under it, and `moveBody` then snaps the
+  body to the far side of the slab. `buildTower` is now a 6x6 high-rise.
+- **Glass:** solid and blocks shots and sight; one bullet (`World::shatterGlass`, called from the
+  player and bot shooting code) or pickaxe hit breaks it. It's drawn transparent and is never an
+  occluder.
+- **Static grid:** `buildStaticGrid()` (end of `generate`) sorts statics into 16 m cells.
+  `collectSolids`, `groundHeight` and `raycast` use it. Statics appended later are checked one by
+  one. If statics are erased or reordered, `gridOk()` notices (count/last box) and falls back to
+  a full scan, but call `buildStaticGrid()` again to get the speed back (tests' `clearArea` does).
+  `staticGridEnabled=false` forces the full scan (a test compares both).
 - **Rarity:** Common → Legendary; each step adds +5% damage.
 - **Knocked:** in team modes, zero HP with a teammate standing means crawling and bleeding out
   over 40 s; a teammate revives you by holding E for 5 s.
@@ -228,6 +246,9 @@ docs/decisions/  ADRs (NNNN-short-title.md)
 - The payment server is written and tested (pytest with faked Stripe; a WinHTTP-to-server run
   under Wine bought and claimed a pack end to end) but not deployed: the user needs a host and
   Stripe keys (server/payments/README.md).
+- Free code signing (asked 2026-11-03): the options are Microsoft Store MSIX (free individual
+  account, Microsoft signs; but Store games must sell K-Bucks through Microsoft's in-app purchases,
+  not Stripe) or SignPath Foundation (free only for fully open-source projects). Nothing set up yet.
 - Next: _decide with the user._ Candidates: deploy the payment server, party leader hosts a real multiplayer match
   (asked for 2026-10-29; not started beyond planning), bots-only vs 100-real-players modes (asked
   to be added later, not now), fix the `fopen` warnings, code signing.

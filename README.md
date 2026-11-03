@@ -34,6 +34,27 @@ app manifest.
 The first time you start the game it puts a **Blockfall** shortcut with the game's B icon on
 your desktop. Delete it and it stays deleted.
 
+## What's new in v17 - a downtown with skyscrapers, and busier places
+
+- **Cobble Cove is now a downtown.** Two avenues with sidewalks cross in the middle, with a glass
+  skyscraper on each corner (7 to 14 floors, up to about 50 m tall). Behind them are mid-rise
+  offices, the town hall and houses. There are street lamps and parked cars to hide behind.
+- **You can go inside every tall building.** Walk in the front door and take the stairs along one
+  wall up through every floor to the roof. Upper floors have desks and boxes for cover, and
+  there's a chest every few floors and on the roof. Tall roofs have a water tank and an antenna
+  with a red light.
+- **Windows.** The glass stops you and stops bullets, but one shot or one pickaxe hit breaks a
+  pane, so you can shoot out a window and fire through it.
+- **More buildings everywhere:** Hilltop Hollow has a 5-floor tower, an office block and three
+  houses. Lantern Lane has two shop buildings with flats above. Scrap Depot has a 4-floor office
+  and a garage. Lookout Ridge's tower is 6 floors. Rusty Reach has a diner and a house. Barnyard
+  Bluff has a second farmhouse (the old one stood on the field). Willow Walk has 8 houses and
+  Pine Pocket up to 6 huts.
+- **Faster with lots of props:** the game sorts every prop into a grid of 16 m squares, so
+  walking, landing and shooting only check what's nearby. With the bigger towns, a frame of game
+  logic still takes about 2 ms.
+- The tower stairs used to bump your head on the floor above. The new stairwell leaves room.
+
 ## What's new in v16 - 30 new skins with glowing FX, and a K-Bucks store
 
 - **30 new skins (94 in all).** Each started as a written concept (in `skins_catalog.py`), then
@@ -212,9 +233,9 @@ your desktop. Delete it and it stays deleted.
 - **Big map: 800 m x 800 m, 100 players** (Solo 100, Duos 50 teams, Trios 34, Squads 25).
   Rolling hills, ~900 trees, 380 rocks, 100 spawn points, a longer bus ride and a storm that
   starts at 300 m.
-- **12 places that all look different:** Cobble Cove (a town with roads and a town hall),
-  Barnyard Bluff (barn, silos, fenced field with hay), Hilltop Hollow (3-floor tower with stairs
-  and a roof chest), Sawmill Springs (mill shed and log piles), Boulder Bend (quarry full of
+- **12 places that all look different:** Cobble Cove (a town with roads and a town hall; a
+  downtown with skyscrapers since v17), Barnyard Bluff (barn, silos, fenced field with hay),
+  Hilltop Hollow (3-floor tower with stairs and a roof chest), Sawmill Springs (mill shed and log piles), Boulder Bend (quarry full of
   rocks), Rusty Reach (gas station with a canopy over the pumps), Pine Pocket (camp huts round a
   fire), Mossy Ruins (broken stone walls), Lantern Lane (a market of eight stalls), Scrap Depot
   (warehouse with crate stacks and barrels), Willow Walk (houses round a well) and Lookout Ridge

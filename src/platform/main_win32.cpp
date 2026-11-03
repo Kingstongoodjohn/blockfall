@@ -199,6 +199,15 @@ struct Demo {
         if (f == 301) fe.settings.gfx = GraphicsSettings::preset(0);
         if (f == 330) pendingShot = "06b_sprint_performance_preset.bmp";
         if (f == 331) fe.settings.gfx = GraphicsSettings::preset(2);
+        // Downtown: stand on the avenue just outside town and look up at the skyscrapers.
+        if (f >= 336 && f <= 339) {
+            const Poi& town = g.world.pois[0];
+            g.player.body.pos = town.center + Vec3(-1.5f, 0, -town.radius + 4.0f);
+            g.player.body.pos.y = g.world.terrainHeight(g.player.body.pos.x, g.player.body.pos.z);
+            g.player.body.vel = Vec3();
+            lookAt(g, town.center + Vec3(0, 16.0f, 0));
+        }
+        if (f == 339) pendingShot = "06a_downtown.bmp";
         if (f == 340) press(r, 'M');
         if (f == 348) pendingShot = "06c_map.bmp";
         if (f == 350) press(r, 'M');

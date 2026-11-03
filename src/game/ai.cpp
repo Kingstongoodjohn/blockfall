@@ -504,6 +504,7 @@ void Game::botShoot(Bot& b) {
             } else if (h.kind == HitKind::Piece) {
                 if (world.build.damage(h.id, bulletDamage(b.gun, h.t, false))) sound(Sfx::BuildBreak, h.point);
             }
+            if (h.kind == HitKind::Static && world.shatterGlass(h.id)) sound(Sfx::BuildBreak, h.point);
         }
         tracers.push_back({muzzle, end, Vec4(1.0f, 0.45f, 0.35f, 0.9f), 0});
     }

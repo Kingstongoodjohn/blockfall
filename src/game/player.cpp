@@ -350,6 +350,7 @@ void Game::firePlayerGun() {
                 pieceDamage[h.id] += bulletDamage(it, h.t, false);
                 hitPoints[100000 + h.id] = h.point;
             }
+            if (h.kind == HitKind::Static && world.shatterGlass(h.id)) sound(Sfx::BuildBreak, h.point);
         }
         tracers.push_back({muzzle, end, Vec4(1.0f, 0.92f, 0.6f, 0.9f), 0});
     }

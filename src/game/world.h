@@ -25,7 +25,11 @@ enum class PropKind : int {
     Stone,    // old stone wall (ruins)
     Well,     // stone ring (village)
     Step,     // stair step inside towers
+    Glass,    // window pane in a tall building: see-through, breaks with one shot or hit
+    Beacon,   // a light: red on antennas, warm on street lamps (glows, not solid)
+    Car,      // parked car (body and cabin share a group)
 };
+constexpr float HIGHRISE_FLOOR_H = 3.6f;   // storey height of towers and skyscrapers
 
 // What kind of place a POI is. Each kind is built differently so they all look distinct.
 enum class PoiKind : int { Town, Farm, Tower, Lumber, Quarry, GasStation, Camp, Ruins, Market, Depot, Village, Lookout, Count };
@@ -149,6 +153,16 @@ public:
     // Pickaxe hit on a static prop. Gives materials and breaks it when its health runs out.
     HarvestResult harvest(int staticIndex, float damage);
     void updateProps(float dt);
+    // A bullet hit static `i`: if it's a window pane, it breaks. Returns true if glass broke.
+    bool shatterGlass(int staticIndex);
+    // Re-sorts the statics into the lookup grid. generate() does this; call it again after
+    // erasing or moving statics (adding new ones at the end is fine without it).
+    void buildStaticGrid();
+    bool staticGridEnabled = true;   // tests switch it off to compare against checking every static
+    // A tall building you can go into: every floor has windows (glass panes you can shoot out),
+    // stairs run up the inside of the +x wall through a hole in each floor, and the roof has a
+    // parapet and a chest (plus a water tank and an antenna on tall ones). doorSide: 0 +z, 2 -z, 3 -x.
+    void buildHighRise(const Vec3& c, float halfX, float halfZ, int floors, int doorSide, const Vec4& wallCol, const Vec4& trimCol, Rng& rng);
 
     void spawnPickup(const Item& item, const Vec3& pos, const Vec3& vel);
     void updatePickups(float dt);
@@ -169,6 +183,19 @@ private:
 
     int hmSize_ = 0;
     std::vector<float> heights_;
+    // Statics sorted into a grid of square cells, so collision, ground and ray queries only look
+    // at the props near them. Statics added after generate() (index >= gridCount_) are checked
+    // one by one, so the grid can never miss anything.
+    static constexpr float GRID_CELL = 16.0f;
+    int gridN_ = 0;
+    size_t gridCount_ = 0;
+    std::vector<std::vector<int>> grid_;
+    mutable std::vector<unsigned> stamp_;
+    mutable unsigned stampNow_ = 0;
+    AABB gridLastBox_;
+    bool gridOk() const;   // false if statics were erased or rearranged since the grid was built
+    // Calls fn(index) once for each static whose box might overlap `region`.
+    template <class Fn> void forStaticsIn(const AABB& region, Fn fn) const;
     std::vector<Vec3> occupied_;   // xz + radius in .y for placement rejection
 };
 

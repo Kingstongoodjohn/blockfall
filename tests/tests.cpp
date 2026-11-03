@@ -61,6 +61,7 @@ static void clearArea(Game& g, const Vec3& c, float r) {
     s.erase(std::remove_if(s.begin(), s.end(), [&](const StaticBox& b) { return lengthXZ(b.box.center() - c) < r; }), s.end());
     auto& ch = g.world.chests;
     ch.erase(std::remove_if(ch.begin(), ch.end(), [&](const Chest& b) { return lengthXZ(b.pos - c) < r; }), ch.end());
+    g.world.buildStaticGrid();
 }
 
 static void run(Game& g, int frames, const std::function<InputState(int)>& f) {
@@ -588,8 +589,13 @@ static void testStage5() {
     const Chest* target = nullptr;
     int ci = -1;
     for (size_t i = 0; i < g.world.chests.size(); ++i) {
-        bool open = true;
-        for (const Vec3& h : g.world.houseCenters) if (lengthXZ(h - g.world.chests[i].pos) < 9) open = false;
+        // A chest out in the open: on the ground, nothing solid where you stand to open it.
+        const Vec3& cp = g.world.chests[i].pos;
+        bool open = cp.y < g.world.terrainHeight(cp.x, cp.z) + 0.3f;
+        for (const Vec3& h : g.world.houseCenters) if (lengthXZ(h - cp) < 9) open = false;
+        std::vector<AABB> near;
+        g.world.collectSolids(AABB(cp + Vec3(-1.5f, 0.3f, -3.5f), cp + Vec3(1.5f, 3, -0.7f)), near);
+        if (!near.empty()) open = false;
         if (open) { ci = (int)i; break; }
     }
     target = &g.world.chests[ci];
@@ -688,6 +694,7 @@ static void testStage6() {
     e.body.pos.y = g.world.terrainHeight(e.body.pos.x, e.body.pos.z);
     e.yaw = PI;  // facing the player
     e.gun = Item::makeGun(GunType::AssaultRifle, Rarity::Common);
+    e.style = BotStyle::Fighter;   // hiders may run off instead
     e.state = AIState::Wander;
     e.moveTarget = e.body.pos;
     std::vector<AIState> seen = {AIState::Wander};
@@ -2034,7 +2041,8 @@ static void testBigMap() {
             case PoiKind::Market: CHECK(countKind(PropKind::Canopy, p) == 8, "%s: eight stalls", p.name.c_str()); break;
             case PoiKind::Depot: CHECK(countKind(PropKind::Crate, p) >= 10, "%s: crate stacks", p.name.c_str()); break;
             case PoiKind::Village: CHECK(countKind(PropKind::Well, p) == 1, "%s: a well", p.name.c_str()); break;
-            case PoiKind::Town: CHECK(countKind(PropKind::Road, p) == 2 && countKind(PropKind::HouseRoof, p) >= 8, "%s: roads and many houses", p.name.c_str()); break;
+            case PoiKind::Town: CHECK(countKind(PropKind::Road, p) >= 2 && countKind(PropKind::HouseRoof, p) >= 8 && countKind(PropKind::Glass, p) > 300 && countKind(PropKind::Car, p) >= 8,
+                                      "%s: avenues, houses, glass towers and cars", p.name.c_str()); break;
             default: break;
         }
     }
@@ -2049,6 +2057,122 @@ static void testBigMap() {
     CHECK(tower && top > tower->center.y + 10, "tower roof chest is %.1f m up", top - (tower ? tower->center.y : 0));
 }
 
+
+// ------------------------------------------------------------------ skyscrapers and the static grid
+static void testSkyscrapers() {
+    section("Downtown skyscrapers, climbing them, glass, and the prop lookup grid");
+    Game g = quietGame();
+    World& w = g.world;
+    const Poi& town = w.pois[0];
+    // Tall towers on all four corners of downtown.
+    int quadrants = 0;
+    float tallest = 0;
+    for (int q = 0; q < 4; ++q) {
+        float best = 0;
+        for (const StaticBox& b : w.statics) {
+            if (b.kind != PropKind::Glass || lengthXZ(b.box.center() - town.center) > town.radius) continue;
+            Vec3 d = b.box.center() - town.center;
+            if ((d.x > 0) != (q & 1) || (d.z > 0) != ((q >> 1) & 1)) continue;
+            best = std::max(best, b.box.max.y - town.center.y);
+        }
+        if (best > 24) ++quadrants;
+        tallest = std::max(tallest, best);
+    }
+    CHECK(quadrants == 4 && tallest > 34, "a skyscraper on every downtown corner (tallest %.0f m)", tallest);
+    int highRises = 0;
+    for (const Poi& p : w.pois) {
+        int glass = 0;
+        for (const StaticBox& b : w.statics)
+            if (b.kind == PropKind::Glass && lengthXZ(b.box.center() - p.center) < p.radius) ++glass;
+        if (glass > 0) ++highRises;
+    }
+    CHECK(highRises >= 5, "buildings with windows in %d places", highRises);
+    // The spawn is still clear of buildings.
+    std::vector<AABB> atSpawn;
+    w.collectSolids(AABB(w.playerSpawn + Vec3(-1, 0.3f, -1), w.playerSpawn + Vec3(1, 2, 1)), atSpawn);
+    CHECK(atSpawn.empty(), "nothing solid on the spawn spot");
+
+    // Climb a 6-floor tower from the door to the roof with the real movement code.
+    standAtCell(g, 20, 20);
+    Vec3 c = g.player.body.pos;
+    clearArea(g, c, 30);
+    c.y = w.terrainHeight(c.x, c.z);
+    const float hx = 7.5f, hz = 7.5f;
+    const int floors = 6;
+    Rng rng(5);
+    size_t before = w.statics.size(), chestsBefore = w.chests.size();
+    w.buildHighRise(c, hx, hz, floors, 2, Vec4(0.8f, 0.8f, 0.8f, 1), Vec4(0.3f, 0.3f, 0.3f, 1), rng);
+    w.buildStaticGrid();
+    CHECK(w.statics.size() - before > 300 && w.chests.size() - chestsBefore >= 3, "tower: %zu pieces, %zu chests",
+          w.statics.size() - before, w.chests.size() - chestsBefore);
+    Body body;
+    body.pos = Vec3(c.x, c.y + 0.05f, c.z - hz - 2.0f);   // outside the door (-z side)
+    std::vector<AABB> none;
+    bool jumped = false;
+    auto walkTo = [&](float x, float z, float secs) {
+        for (int i = 0; i < (int)(secs * 60); ++i) {
+            Vec3 d(x - body.pos.x, 0, z - body.pos.z);
+            float len = lengthXZ(d);
+            if (len < 0.15f) break;
+            body.vel.x = d.x / len * 4.0f;
+            body.vel.z = d.z / len * 4.0f;
+            Vec3 was = body.pos;
+            w.moveBody(body, DT, none);
+            if (lengthXZ(body.pos - was) > 0.5f) jumped = true;   // never teleported across a room
+        }
+        body.vel.x = body.vel.z = 0;
+    };
+    const float stairX = c.x + hx - 0.4f - 0.8f;      // middle of the stairs
+    walkTo(c.x, c.z - hz + 1.5f, 4);                  // in through the door
+    int reached = 0;
+    for (int f = 0; f < floors; ++f) {
+        walkTo(c.x + 2.0f, c.z - hz + 1.0f, 6);       // to the foot of the stairs...
+        walkTo(stairX, c.z - hz + 1.0f, 4);
+        walkTo(stairX, c.z + hz - 0.9f, 8);           // ...up them...
+        if (body.pos.y > c.y + (f + 1) * HIGHRISE_FLOOR_H - 0.3f) ++reached;
+        if (f < floors - 1) walkTo(c.x + 2.0f, c.z + hz - 0.9f, 4);   // ...and off onto the next floor
+    }
+    CHECK(reached == floors && !jumped, "walked up %d of %d flights to the roof (at %.1f m)", reached, floors, body.pos.y - c.y);
+
+    // Window glass: solid and bullet-proof until it's hit once, then it's gone.
+    int pane = -1;
+    for (size_t i = before; i < w.statics.size(); ++i)
+        if (w.statics[i].kind == PropKind::Glass) { pane = (int)i; break; }
+    Vec3 pc = w.statics[(size_t)pane].box.center();
+    Vec3 nrm = w.statics[(size_t)pane].box.size().x < w.statics[(size_t)pane].box.size().z ? Vec3(1, 0, 0) : Vec3(0, 0, 1);
+    Ray shot{pc - nrm * 5.0f, nrm};
+    HitInfo h1, h2;
+    bool blocked = w.raycast(shot, 10, h1, false) && h1.kind == HitKind::Static && h1.id == pane;
+    bool broke = w.shatterGlass(pane);
+    bool through = !(w.raycast(shot, 5.5f, h2, false) && h2.kind == HitKind::Static && h2.id == pane);
+    CHECK(blocked && broke && through && !w.statics[(size_t)pane].alive, "glass stops a shot, breaks, then lets shots through");
+    CHECK(!w.shatterGlass(before), "only glass shatters from bullets");
+
+    // The lookup grid gives exactly the same answers as checking every prop.
+    Rng r2(99);
+    int same = 0, total = 0;
+    for (int i = 0; i < 400; ++i) {
+        const Poi& p = w.pois[(size_t)r2.rangeInt(0, (int)w.pois.size() - 1)];
+        Vec3 o = p.center + Vec3(r2.range(-40, 40), r2.range(0.5f, 40), r2.range(-40, 40));
+        Vec3 d = normalize(Vec3(r2.range(-1, 1), r2.range(-0.6f, 0.3f), r2.range(-1, 1)));
+        Ray ray{o, d};
+        HitInfo a, b;
+        w.staticGridEnabled = true;
+        bool ha = w.raycast(ray, 150, a, false);
+        float ga = w.groundHeight(o.x, o.z, 0.4f, o.y, 0.8f);
+        std::vector<AABB> sa;
+        w.collectSolids(AABB(o - Vec3(3, 3, 3), o + Vec3(3, 3, 3)), sa);
+        w.staticGridEnabled = false;
+        bool hb = w.raycast(ray, 150, b, false);
+        float gb = w.groundHeight(o.x, o.z, 0.4f, o.y, 0.8f);
+        std::vector<AABB> sb;
+        w.collectSolids(AABB(o - Vec3(3, 3, 3), o + Vec3(3, 3, 3)), sb);
+        ++total;
+        if (ha == hb && (!ha || (a.kind == b.kind && a.id == b.id && std::fabs(a.t - b.t) < 1e-4f)) && ga == gb && sa.size() == sb.size()) ++same;
+    }
+    w.staticGridEnabled = true;
+    CHECK(same == total, "grid and full scan agree on %d of %d rays, ground and collision checks", same, total);
+}
 
 // ------------------------------------------------------------------ fall damage + shockwaves + bot styles
 static void testFallShockBots() {
@@ -3062,6 +3186,7 @@ int main() {
     testBuildUp();
     testAccounts();
     testBigMap();
+    testSkyscrapers();
     testFallShockBots();
     testPathfinding();
     testSound();

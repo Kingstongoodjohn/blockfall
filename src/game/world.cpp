@@ -82,6 +82,9 @@ void World::generate(uint64_t seed) {
     ++generation;
     build.clear();
     statics.clear();
+    gridN_ = 0;   // the grid is rebuilt at the end
+    gridCount_ = 0;
+    grid_.clear();
     groups.clear();
     chests.clear();
     pickups.clear();
@@ -122,10 +125,14 @@ void World::generate(uint64_t seed) {
         poi.center.y = rawTerrain(poi.center.x, poi.center.z);
         if (poi.kind == PoiKind::Lookout) poi.center.y += 7.0f;   // sits on a hill
         if (poi.kind == PoiKind::Quarry) poi.center.y -= 3.0f;    // dug into the ground
-        poi.radius = poi.kind == PoiKind::Town ? 46.0f : 36.0f;
+        switch (poi.kind) {
+            case PoiKind::Town: poi.radius = 60.0f; break;   // downtown
+            case PoiKind::Market: case PoiKind::Depot: case PoiKind::Village: case PoiKind::Tower: poi.radius = 40.0f; break;
+            default: poi.radius = 36.0f; break;
+        }
         pois.push_back(poi);
     }
-    playerSpawn = Vec3(pois[0].center.x + 2.5f, 0, pois[0].center.z - 52.0f);
+    playerSpawn = Vec3(pois[0].center.x + 2.5f, 0, pois[0].center.z - pois[0].radius - 6.0f);   // on the avenue, just outside downtown
 
     // Heightmap: rolling hills, flattened under every place.
     hmSize_ = (int)(2 * MAP_HALF / HEIGHTMAP_STEP) + 1;
@@ -191,6 +198,7 @@ void World::generate(uint64_t seed) {
         if (!farFromOthers) continue;
         enemySpawns.push_back(Vec3(x, terrainHeight(x, z), z));
     }
+    buildStaticGrid();
 }
 
 // ------------------------------------------------------------------ places
@@ -213,16 +221,71 @@ void World::buildPoi(Poi& poi, Rng& rng) {
     int extraChests = 2;
     switch (poi.kind) {
         case PoiKind::Town: {
-            // A grid of houses on two crossing roads.
-            box(AABB({c.x - 42, c.y - 0.05f, c.z - 3}, {c.x + 42, c.y + 0.04f, c.z + 3}), rgb(0.3f, 0.3f, 0.32f), PropKind::Road, false, -1);
-            box(AABB({c.x - 3, c.y - 0.05f, c.z - 42}, {c.x + 3, c.y + 0.04f, c.z + 42}), rgb(0.3f, 0.3f, 0.32f), PropKind::Road, false, -1);
-            for (int gx = -1; gx <= 1; ++gx)
-                for (int gz = -1; gz <= 1; ++gz) {
-                    if (gx == 0 || gz == 0) continue;
-                    for (int k = 0; k < 2; ++k) house(c.x + gx * 13.0f + (k ? gx * 13.0f : 0), c.z + gz * 13.0f + rng.range(-1.5f, 1.5f));
+            // Downtown: two crossing avenues with a skyscraper on each inner corner, mid-rise
+            // offices and the town hall behind them, houses on the outer corners, street lamps
+            // and parked cars for cover.
+            const Vec4 asphalt = rgb(0.28f, 0.28f, 0.3f), walk = rgb(0.62f, 0.61f, 0.58f);
+            const float L = poi.radius - 2;
+            box(AABB({c.x - L, c.y - 0.05f, c.z - 3}, {c.x + L, c.y + 0.04f, c.z + 3}), asphalt, PropKind::Road, false, -1);
+            box(AABB({c.x - 3, c.y - 0.05f, c.z - L}, {c.x + 3, c.y + 0.04f, c.z + L}), asphalt, PropKind::Road, false, -1);
+            for (int sgn : {-1, 1}) {   // sidewalks
+                box(AABB({c.x - L, c.y - 0.05f, c.z + sgn * 3 - 1.2f}, {c.x + L, c.y + 0.07f, c.z + sgn * 3 + 1.2f}), walk, PropKind::Road, false, -1);
+                box(AABB({c.x + sgn * 3 - 1.2f, c.y - 0.05f, c.z - L}, {c.x + sgn * 3 + 1.2f, c.y + 0.07f, c.z + L}), walk, PropKind::Road, false, -1);
+            }
+            struct Look { Vec4 wall, trim; };
+            static const Look looks[] = {
+                {rgb(0.78f, 0.78f, 0.76f), rgb(0.32f, 0.36f, 0.42f)},   // white and steel
+                {rgb(0.36f, 0.4f, 0.48f), rgb(0.2f, 0.22f, 0.26f)},     // dark blue glass tower
+                {rgb(0.82f, 0.72f, 0.56f), rgb(0.55f, 0.42f, 0.3f)},    // sandstone
+                {rgb(0.62f, 0.3f, 0.26f), rgb(0.85f, 0.82f, 0.76f)},    // red brick
+            };
+            int tall[4] = {12, 9, 10, 7};
+            for (int i = 3; i > 0; --i) std::swap(tall[i], tall[rng.rangeInt(0, i)]);
+            int q = 0;
+            for (int gx : {-1, 1})
+                for (int gz : {-1, 1}) {
+                    const Look& lk = looks[q];
+                    // Skyscraper on the corner of the avenues (doors face the x avenue).
+                    buildHighRise(Vec3(c.x + gx * 14.5f, c.y, c.z + gz * 14.5f), 7.5f, 7.5f, tall[q] + rng.rangeInt(0, 2), gz > 0 ? 2 : 0, lk.wall, lk.trim, rng);
+                    // Behind it along the z avenue: a mid-rise office.
+                    const Look& lk2 = looks[(q + 2) % 4];
+                    buildHighRise(Vec3(c.x + gx * 14.0f, c.y, c.z + gz * 37.0f), 6.5f, 6.0f, rng.rangeInt(3, 5), gz > 0 ? 2 : 0, lk2.wall, lk2.trim, rng);
+                    // Along the x avenue: the town hall in one corner, a house elsewhere.
+                    if (gx > 0 && gz < 0)
+                        buildBuilding(Vec3(c.x + 36, c.y, c.z - 14), 9, 6, 4.0f, 0, rgb(0.9f, 0.85f, 0.7f), rgb(0.3f, 0.35f, 0.5f), false, rng);
+                    else
+                        house(c.x + gx * 36.0f, c.z + gz * 14.0f);
+                    if (gx > 0 && gz < 0) occupied_.push_back(Vec3(c.x + 36, 11.0f, c.z - 14));
+                    // Outer corner: another house.
+                    house(c.x + gx * 37.0f, c.z + gz * 37.0f);
+                    ++q;
                 }
-            buildBuilding(Vec3(c.x + 26, c.y, c.z - 26), 9, 6, 4.0f, 2, rgb(0.9f, 0.85f, 0.7f), rgb(0.3f, 0.35f, 0.5f), false, rng);  // town hall
-            extraChests = 5;
+            // Street lamps along the sidewalks.
+            for (float d = -L + 6; d <= L - 6; d += 13.0f) {
+                if (std::fabs(d) < 6) continue;   // keep the crossing clear
+                for (int sgn : {-1, 1}) {
+                    for (int axis = 0; axis < 2; ++axis) {
+                        float x = c.x + (axis ? sgn * 3.9f : d), z = c.z + (axis ? d : sgn * 3.9f);
+                        box(AABB({x - 0.1f, c.y, z - 0.1f}, {x + 0.1f, c.y + 5.0f, z + 0.1f}), rgb(0.25f, 0.26f, 0.28f), PropKind::Post, true, -1);
+                        box(AABB({x - 0.28f, c.y + 5.0f, z - 0.28f}, {x + 0.28f, c.y + 5.35f, z + 0.28f}), rgb(1.0f, 0.86f, 0.55f), PropKind::Beacon, false, -1);
+                    }
+                }
+            }
+            // Parked cars.
+            static const Vec4 paint[] = {rgb(0.8f, 0.15f, 0.15f), rgb(0.15f, 0.35f, 0.8f), rgb(0.92f, 0.92f, 0.9f), rgb(0.1f, 0.1f, 0.12f),
+                                         rgb(0.95f, 0.75f, 0.1f), rgb(0.2f, 0.6f, 0.35f)};
+            for (int i = 0; i < 8; ++i) {
+                bool alongX = i % 2 == 0;
+                float d = (i < 4 ? -1 : 1) * rng.range(12.0f, L - 10), side = (i % 4 < 2 ? -1.0f : 1.0f) * 1.6f;
+                float x = c.x + (alongX ? d : side), z = c.z + (alongX ? side : d);
+                float hx = alongX ? 2.1f : 0.95f, hz = alongX ? 0.95f : 2.1f;
+                int grp = newGroup(250.0f, 10, 2);
+                const Vec4& col = paint[rng.rangeInt(0, 5)];
+                box(AABB({x - hx, c.y + 0.25f, z - hz}, {x + hx, c.y + 1.15f, z + hz}), col, PropKind::Car, true, grp);
+                box(AABB({x - hx * (alongX ? 0.5f : 0.9f), c.y + 1.15f, z - hz * (alongX ? 0.9f : 0.5f)},
+                         {x + hx * (alongX ? 0.5f : 0.9f), c.y + 1.8f, z + hz * (alongX ? 0.9f : 0.5f)}), Vec4(col.x * 0.55f + 0.08f, col.y * 0.55f + 0.1f, col.z * 0.55f + 0.14f, 1), PropKind::Car, true, grp);
+            }
+            extraChests = 6;
             break;
         }
         case PoiKind::Farm: {
@@ -232,7 +295,8 @@ void World::buildPoi(Poi& poi, Rng& rng) {
                 box(AABB({x - 2.2f, c.y - 0.2f, z - 2.2f}, {x + 2.2f, c.y + 9.0f, z + 2.2f}), metal, PropKind::Silo, true, newGroup(300, 10, 2));
                 occupied_.push_back(Vec3(x, 3.0f, z));
             }
-            house(c.x - 18, c.z + 12);
+            house(c.x - 18, c.z - 14);
+            house(c.x + 22, c.z + 16);
             // Fenced field with hay bales.
             float fx0 = c.x - 24, fx1 = c.x + 6, fz0 = c.z + 10, fz1 = c.z + 30;
             for (float x = fx0; x < fx1; x += 3)
@@ -248,9 +312,12 @@ void World::buildPoi(Poi& poi, Rng& rng) {
             break;
         }
         case PoiKind::Tower: {
-            buildTower(c, 3, rng);
+            buildHighRise(c, 6.5f, 6.5f, 5, 2, rgb(0.6f, 0.58f, 0.52f), rgb(0.42f, 0.4f, 0.38f), rng);
+            buildHighRise(Vec3(c.x - 20, c.y, c.z + 15), 7.0f, 5.0f, 3, 0, rgb(0.82f, 0.72f, 0.56f), rgb(0.5f, 0.4f, 0.3f), rng);  // offices
             house(c.x + 20, c.z + 6);
             house(c.x - 18, c.z - 10);
+            house(c.x + 14, c.z - 20);
+            extraChests = 3;
             break;
         }
         case PoiKind::Lumber: {
@@ -292,6 +359,10 @@ void World::buildPoi(Poi& poi, Rng& rng) {
         }
         case PoiKind::GasStation: {
             buildBuilding(Vec3(c.x - 10, c.y, c.z), 8, 5, 3.6f, 1, rgb(0.92f, 0.92f, 0.9f), rgb(0.85f, 0.25f, 0.2f), false, rng);  // the shop
+            occupied_.push_back(Vec3(c.x - 10, 10.0f, c.z));
+            buildBuilding(Vec3(c.x - 10, c.y, c.z + 19), 6, 4, 3.4f, 2, rgb(0.95f, 0.85f, 0.55f), rgb(0.2f, 0.55f, 0.6f), false, rng);  // diner
+            occupied_.push_back(Vec3(c.x - 10, 7.5f, c.z + 19));
+            house(c.x - 12, c.z - 20);
             // Canopy over the pumps on four posts.
             float px0 = c.x + 4, pz0 = c.z - 8, px1 = c.x + 18, pz1 = c.z + 8;
             for (float x : {px0, px1})
@@ -310,10 +381,11 @@ void World::buildPoi(Poi& poi, Rng& rng) {
             break;
         }
         case PoiKind::Camp: {
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0, tries = 0; i < 6 && tries < 60; ++tries) {
                 float x, z;
-                around(8, 22, x, z);
+                around(8, 24, x, z);
                 if (!spotFree(x, z, 4.0f)) continue;
+                ++i;
                 buildBuilding(Vec3(x, c.y, z), 3, 3, 2.6f, rng.rangeInt(0, 3), rgb(0.5f, 0.35f, 0.22f), rgb(0.3f, 0.5f, 0.3f), false, rng);  // huts
                 occupied_.push_back(Vec3(x, 5.0f, z));
             }
@@ -366,11 +438,18 @@ void World::buildPoi(Poi& poi, Rng& rng) {
             }
             house(c.x + 22, c.z + 22);
             house(c.x - 22, c.z - 22);
+            // Shops with flats above.
+            buildHighRise(Vec3(c.x + 22, c.y, c.z - 21), 6.0f, 5.5f, 3, 0, rgb(0.86f, 0.8f, 0.66f), rgb(0.55f, 0.3f, 0.25f), rng);
+            buildHighRise(Vec3(c.x - 22, c.y, c.z + 21), 6.0f, 5.5f, 4, 2, rgb(0.62f, 0.74f, 0.86f), rgb(0.3f, 0.32f, 0.4f), rng);
             extraChests = 4;
             break;
         }
         case PoiKind::Depot: {
             buildBuilding(Vec3(c.x, c.y, c.z), 12, 8, 6.0f, 1, rgb(0.5f, 0.55f, 0.6f), rgb(0.35f, 0.38f, 0.42f), true, rng);  // warehouse
+            occupied_.push_back(Vec3(c.x, 14.5f, c.z));
+            buildHighRise(Vec3(c.x - 22, c.y, c.z + 20), 6.0f, 5.0f, 4, 2, rgb(0.55f, 0.58f, 0.62f), rgb(0.85f, 0.55f, 0.15f), rng);  // depot office
+            buildBuilding(Vec3(c.x + 24, c.y, c.z - 16), 7, 5, 5.0f, 3, rgb(0.62f, 0.5f, 0.4f), rgb(0.35f, 0.3f, 0.28f), true, rng);   // garage
+            occupied_.push_back(Vec3(c.x + 24, 9.5f, c.z - 16));
             // Stacks of crates and lots of barrels.
             for (int i = 0; i < 10; ++i) {
                 float x, z;
@@ -394,9 +473,9 @@ void World::buildPoi(Poi& poi, Rng& rng) {
             // Houses in a ring around a well.
             box(AABB({c.x - 1.6f, c.y - 0.2f, c.z - 1.6f}, {c.x + 1.6f, c.y + 1.1f, c.z + 1.6f}), stone, PropKind::Well, true, newGroup(200, 6, 1));
             occupied_.push_back(Vec3(c.x, 2.5f, c.z));
-            for (int i = 0; i < 6; ++i) {
-                float a = i * 2 * PI / 6 + rng.range(-0.15f, 0.15f);
-                house(c.x + std::sin(a) * 17.0f, c.z + std::cos(a) * 17.0f);
+            for (int i = 0; i < 8; ++i) {
+                float a = i * 2 * PI / 8 + rng.range(-0.1f, 0.1f);
+                house(c.x + std::sin(a) * 19.0f, c.z + std::cos(a) * 19.0f);
             }
             for (int i = 0; i < 12; ++i) {
                 float x, z;
@@ -407,7 +486,7 @@ void World::buildPoi(Poi& poi, Rng& rng) {
             break;
         }
         case PoiKind::Lookout: {
-            buildTower(c, 4, rng);
+            buildTower(c, 6, rng);
             house(c.x - 16, c.z + 8);
             for (int i = 0; i < 8; ++i) {
                 float x, z;
@@ -482,60 +561,122 @@ void World::buildBuilding(const Vec3& c, float halfX, float halfZ, float wallH, 
 // A square tower with several floors joined by stairs along the walls, and a roof you can
 // stand on (reached through the hole in the top floor).
 void World::buildTower(const Vec3& c, int floors, Rng& rng) {
-    (void)rng;
-    const float half = 6.0f, t = 0.3f, fh = 3.6f, base = c.y;
-    const Vec4 wall = rgb(0.6f, 0.58f, 0.52f), slab = rgb(0.45f, 0.42f, 0.4f);
-    statics.push_back({AABB({c.x - half, base - 0.6f, c.z - half}, {c.x + half, base + 0.05f, c.z + half}), slab, PropKind::HouseFloor, true, true});
+    buildHighRise(c, 6.0f, 6.0f, floors, 2, rgb(0.6f, 0.58f, 0.52f), rgb(0.45f, 0.43f, 0.4f), rng);
+}
+
+void World::buildHighRise(const Vec3& c, float halfX, float halfZ, int floors, int doorSide, const Vec4& wallCol, const Vec4& trimCol, Rng& rng) {
+    const float t = 0.4f, fh = HIGHRISE_FLOOR_H, base = c.y;
+    const float sill = 1.0f, head = 3.0f;           // window band on each floor: glass from sill to head
+    const float pw = 0.6f;                          // pillar width
+    const Vec4 slab = rgb(0.45f, 0.43f, 0.42f);
+    const Vec4 glass(0.55f, 0.75f, 0.92f, 0.32f);
+    if (doorSide == 1) doorSide = 2;   // +x holds the stairs, so the door goes elsewhere
+    statics.push_back({AABB({c.x - halfX, base - 0.6f, c.z - halfZ}, {c.x + halfX, base + 0.05f, c.z + halfZ}), slab, PropKind::HouseFloor, true, true});
+
+    // Stairs: up the inside of the +x wall, 8 steps a floor, rising toward +z.
+    const int steps = 8;
+    const float stairW = 1.6f, run = 2 * halfZ - 2 * t, stepL = run / steps, rise = fh / steps;
+    const float sx1 = c.x + halfX - t, sx0 = sx1 - stairW;
+    const float z0 = c.z - halfZ + t;
+    // The slab above has a hole over the part of the stairs where your head would hit it (from the
+    // 4th step on, with room for the body's back edge).
+    const float holeX0 = sx0 - 0.3f, holeZ0 = z0 + 3 * stepL - 0.9f;
+
     for (int f = 0; f < floors; ++f) {
         float y0 = base + f * fh;
         for (int side = 0; side < 4; ++side) {
             bool alongX = (side == 0 || side == 2);
-            float fixed = (side == 0 || side == 1) ? half - t * 0.5f : -half + t * 0.5f;
-            auto addSeg = [&](float a0, float a1, float yy0, float yy1) {
-                AABB b;
-                if (alongX) b = AABB({c.x + a0, yy0, c.z + fixed - t * 0.5f}, {c.x + a1, yy1, c.z + fixed + t * 0.5f});
-                else b = AABB({c.x + fixed - t * 0.5f, yy0, c.z + a0}, {c.x + fixed + t * 0.5f, yy1, c.z + a1});
-                statics.push_back({b, wall, PropKind::HouseWall, true, true, newGroup(260.0f, 6, 1)});
+            float half = alongX ? halfX : halfZ, other = alongX ? halfZ : halfX;
+            float sign = (side == 0 || side == 1) ? 1.0f : -1.0f;
+            float fixed = sign * (other - t * 0.5f);
+            // A box spanning a0..a1 along the side, y0..y1, from `in` to `out` metres off the wall's middle.
+            auto piece = [&](float a0, float a1, float yy0, float yy1, float in, float out, const Vec4& col, PropKind kind, int group) {
+                float f0 = fixed + sign * in, f1 = fixed + sign * out;
+                if (f0 > f1) std::swap(f0, f1);
+                AABB b = alongX ? AABB({c.x + a0, yy0, c.z + f0}, {c.x + a1, yy1, c.z + f1})
+                                : AABB({c.x + f0, yy0, c.z + a0}, {c.x + f1, yy1, c.z + a1});
+                bool solid = true;
+                statics.push_back({b, col, kind, solid, solid, group});
             };
-            if (f == 0 && side == 2) {  // door on the ground floor
-                addSeg(-half, -1.0f, y0, y0 + fh);
-                addSeg(1.0f, half, y0, y0 + fh);
-                addSeg(-1.0f, 1.0f, y0 + 2.5f, y0 + fh);
-            } else {  // a window
-                addSeg(-half, -1.2f, y0, y0 + fh);
-                addSeg(1.2f, half, y0, y0 + fh);
-                addSeg(-1.2f, 1.2f, y0, y0 + 1.2f);
-                addSeg(-1.2f, 1.2f, y0 + 2.4f, y0 + fh);
+            const int bays = std::max(2, (int)std::lround(2 * half / 3.5f));
+            const float bayL = 2 * half / bays;
+            const bool door = (f == 0 && side == doorSide);
+            const int doorBay = bays / 2;
+            // Band from the window head of this floor to the sill of the next (it hides the slab edge).
+            float bandTop = (f == floors - 1) ? y0 + fh : y0 + fh + sill;
+            piece(-half, half, y0 + head, bandTop, -t * 0.5f, t * 0.5f, wallCol, PropKind::HouseWall, newGroup(300.0f, 8, 1));
+            if (f == 0) {   // the bottom band (split around the door)
+                if (door) {
+                    float d0 = -half + doorBay * bayL + pw * 0.5f, d1 = -half + (doorBay + 1) * bayL - pw * 0.5f;
+                    piece(-half, d0, y0, y0 + sill, -t * 0.5f, t * 0.5f, wallCol, PropKind::HouseWall, newGroup(260.0f, 6, 1));
+                    piece(d1, half, y0, y0 + sill, -t * 0.5f, t * 0.5f, wallCol, PropKind::HouseWall, newGroup(260.0f, 6, 1));
+                } else {
+                    piece(-half, half, y0, y0 + sill, -t * 0.5f, t * 0.5f, wallCol, PropKind::HouseWall, newGroup(300.0f, 8, 1));
+                }
+            }
+            // Pillars between the windows (standing a little proud of the wall), glass in between.
+            for (int k = 0; k <= bays; ++k) {
+                float a = -half + k * bayL;
+                float a0 = std::max(-half, a - pw * 0.5f), a1 = std::min(half, a + pw * 0.5f);
+                float py0 = (f == 0 && door && (k == doorBay || k == doorBay + 1)) ? y0 : y0 + sill;
+                piece(a0, a1, py0, y0 + head, -t * 0.5f, t * 0.5f + 0.15f, trimCol, PropKind::HouseWall, newGroup(260.0f, 6, 1));
+            }
+            for (int k = 0; k < bays; ++k) {
+                if (door && k == doorBay) continue;   // the doorway
+                float a0 = -half + k * bayL + pw * 0.5f, a1 = -half + (k + 1) * bayL - pw * 0.5f;
+                piece(a0, a1, y0 + sill, y0 + head, -0.05f, 0.05f, glass, PropKind::Glass, newGroup(1.0f, 0, 2));
             }
         }
-        // Stairs up the +x wall to a hole in the next slab.
-        const int steps = 8;
-        for (int s = 0; s < steps; ++s) {
-            float sz0 = c.z - half + t + s * (2 * half - 2 * t) / steps;
-            float sz1 = sz0 + (2 * half - 2 * t) / steps;
-            float sy = y0 + (s + 1) * fh / steps;
-            statics.push_back({AABB({c.x + half - t - 1.6f, sy - 0.25f, sz0}, {c.x + half - t, sy, sz1}), slab, PropKind::Step, true, true});
+        // Stairs to the next floor (or the roof).
+        for (int k = 0; k < steps; ++k) {
+            float sz0 = z0 + k * stepL, sy = y0 + (k + 1) * rise;
+            statics.push_back({AABB({sx0, sy - 0.25f, sz0}, {sx1, sy, sz0 + stepL}), slab, PropKind::Step, true, true});
         }
-        // Slab above with a hole at the top of the stairs (the +x,+z corner).
+        // The slab above, with the hole over the stairs.
         float sy = y0 + fh;
-        statics.push_back({AABB({c.x - half, sy - 0.25f, c.z - half}, {c.x + half - 1.8f, sy, c.z + half}), slab, PropKind::HouseFloor, true, true});
-        statics.push_back({AABB({c.x + half - 1.8f, sy - 0.25f, c.z - half}, {c.x + half, sy, c.z + half - 2.6f}), slab, PropKind::HouseFloor, true, true});
+        statics.push_back({AABB({c.x - halfX, sy - 0.25f, c.z - halfZ}, {holeX0, sy, c.z + halfZ}), slab, PropKind::HouseFloor, true, true});
+        statics.push_back({AABB({holeX0, sy - 0.25f, c.z - halfZ}, {c.x + halfX, sy, holeZ0}), slab, PropKind::HouseFloor, true, true});
+        // Some cover on the upper floors (desks and boxes) and a chest every third floor.
+        if (f > 0) {
+            for (int k = 0; k < 2; ++k) {
+                float dx = c.x - halfX * 0.35f + rng.range(-1.5f, 1.5f), dz = c.z + (k ? 1 : -1) * halfZ * 0.4f;
+                statics.push_back({AABB({dx - 1.1f, y0, dz - 0.5f}, {dx + 1.1f, y0 + 1.0f, dz + 0.5f}), rgb(0.55f, 0.42f, 0.28f),
+                                   PropKind::Crate, true, true, newGroup(100.0f, 6, 0)});
+            }
+        }
+        if (f % 3 == 1) {
+            Chest ch;
+            ch.pos = Vec3(c.x - halfX + 1.4f, y0 + 0.0f, c.z + ((f / 3) % 2 ? halfZ - 1.4f : -halfZ + 1.4f));
+            chests.push_back(ch);
+        }
     }
-    // Roof parapet.
+    // Roof: parapet, a water tank on the roof, an antenna and a chest.
     float top = base + floors * fh;
     for (int side = 0; side < 4; ++side) {
         bool alongX = (side == 0 || side == 2);
-        float fixed = (side == 0 || side == 1) ? half - t * 0.5f : -half + t * 0.5f;
-        AABB b = alongX ? AABB({c.x - half, top, c.z + fixed - t * 0.5f}, {c.x + half, top + 1.0f, c.z + fixed + t * 0.5f})
-                        : AABB({c.x + fixed - t * 0.5f, top, c.z - half}, {c.x + fixed + t * 0.5f, top + 1.0f, c.z + half});
-        statics.push_back({b, wall, PropKind::HouseWall, true, true, newGroup(200.0f, 6, 1)});
+        float fixed = (side == 0 || side == 1) ? (alongX ? halfZ : halfX) - t * 0.5f : -(alongX ? halfZ : halfX) + t * 0.5f;
+        AABB b = alongX ? AABB({c.x - halfX, top, c.z + fixed - t * 0.5f}, {c.x + halfX, top + 1.0f, c.z + fixed + t * 0.5f})
+                        : AABB({c.x + fixed - t * 0.5f, top, c.z - halfZ}, {c.x + fixed + t * 0.5f, top + 1.0f, c.z + halfZ});
+        statics.push_back({b, wallCol, PropKind::HouseWall, true, true, newGroup(200.0f, 6, 1)});
     }
-    occupied_.push_back(Vec3(c.x, half + 3.0f, c.z));
+    if (floors >= 5) {
+        float tx = c.x - halfX * 0.45f, tz = c.z + halfZ * 0.4f, r = std::min(2.0f, std::min(halfX, halfZ) * 0.3f);
+        for (int k = 0; k < 4; ++k) {
+            float lx = tx + (k % 2 ? r * 0.7f : -r * 0.7f), lz = tz + (k / 2 ? r * 0.7f : -r * 0.7f);
+            statics.push_back({AABB({lx - 0.15f, top, lz - 0.15f}, {lx + 0.15f, top + 2.0f, lz + 0.15f}), rgb(0.35f, 0.36f, 0.4f), PropKind::Post, true, true});
+        }
+        statics.push_back({AABB({tx - r, top + 2.0f, tz - r}, {tx + r, top + 4.6f, tz + r}), rgb(0.5f, 0.38f, 0.26f), PropKind::Silo, true, true,
+                           newGroup(300.0f, 10, 0)});
+        float ax = c.x + halfX * 0.2f, az = c.z - halfZ * 0.5f, ah = 4.0f + floors * 0.5f;
+        statics.push_back({AABB({ax - 0.12f, top, az - 0.12f}, {ax + 0.12f, top + ah, az + 0.12f}), rgb(0.7f, 0.7f, 0.72f), PropKind::Post, true, true});
+        statics.push_back({AABB({ax - 0.25f, top + ah, az - 0.25f}, {ax + 0.25f, top + ah + 0.5f, az + 0.25f}), rgb(1.0f, 0.25f, 0.2f), PropKind::Beacon, false, false});
+    }
+    occupied_.push_back(Vec3(c.x, std::sqrt(halfX * halfX + halfZ * halfZ) + 2.5f, c.z));
     Chest ch;
-    ch.pos = Vec3(c.x - half + 1.5f, top + 0.0f, c.z - half + 1.5f);  // on the roof
+    ch.pos = Vec3(c.x - halfX + 1.5f, top, c.z - halfZ + 1.5f);  // on the roof
     chests.push_back(ch);
     Chest ch2;
-    ch2.pos = Vec3(c.x - half + 1.5f, base + 0.05f, c.z + half - 1.5f);
+    ch2.pos = Vec3(c.x - halfX + 1.5f, base + 0.05f, c.z + halfZ - 1.5f);
     chests.push_back(ch2);
 }
 
@@ -660,12 +801,47 @@ bool World::raycast(const Ray& r, float maxT, HitInfo& hit, bool includeChests) 
         }
     }
 
-    for (size_t i = 0; i < statics.size(); ++i) {
-        const StaticBox& s = statics[i];
-        if (!s.blockShots || !s.alive) continue;
+    auto testStatic = [&](int i) {
+        const StaticBox& s = statics[(size_t)i];
+        if (!s.blockShots || !s.alive) return;
         if (rayAABB(r, s.box, hit.t, t, n) && t < hit.t) {
-            hit.kind = HitKind::Static; hit.t = t; hit.normal = n; hit.id = (int)i;
+            hit.kind = HitKind::Static; hit.t = t; hit.normal = n; hit.id = i;
         }
+    };
+    if (!gridOk()) {
+        for (size_t i = 0; i < statics.size(); ++i) testStatic((int)i);
+    } else {
+        // Walk the grid cells under the ray in order (2D DDA) and stop once a hit is closer than
+        // the next cell.
+        if (stamp_.size() < gridCount_) stamp_.resize(gridCount_, 0);
+        if (++stampNow_ == 0) {
+            std::fill(stamp_.begin(), stamp_.end(), 0u);
+            stampNow_ = 1;
+        }
+        const float off = MAP_HALF + 40.0f;
+        float gx = (r.origin.x + off) / GRID_CELL, gz = (r.origin.z + off) / GRID_CELL;
+        int cx = (int)std::floor(gx), cz = (int)std::floor(gz);
+        int stepX = r.dir.x > 0 ? 1 : -1, stepZ = r.dir.z > 0 ? 1 : -1;
+        float invX = std::fabs(r.dir.x) > 1e-8f ? 1.0f / std::fabs(r.dir.x) : 1e30f;
+        float invZ = std::fabs(r.dir.z) > 1e-8f ? 1.0f / std::fabs(r.dir.z) : 1e30f;
+        float tMaxX = (stepX > 0 ? (cx + 1 - gx) : (gx - cx)) * GRID_CELL * invX;
+        float tMaxZ = (stepZ > 0 ? (cz + 1 - gz) : (gz - cz)) * GRID_CELL * invZ;
+        float tDX = GRID_CELL * invX, tDZ = GRID_CELL * invZ;
+        float tCell = 0;
+        for (int guard = 0; guard < 4 * gridN_ && tCell <= hit.t; ++guard) {
+            if (cx >= 0 && cz >= 0 && cx < gridN_ && cz < gridN_) {
+                for (int i : grid_[(size_t)cz * gridN_ + cx]) {
+                    if (stamp_[(size_t)i] == stampNow_) continue;
+                    stamp_[(size_t)i] = stampNow_;
+                    testStatic(i);
+                }
+            } else if ((cx < 0 && stepX < 0) || (cz < 0 && stepZ < 0) || (cx >= gridN_ && stepX > 0) || (cz >= gridN_ && stepZ > 0)) {
+                break;   // left the grid for good
+            }
+            if (tMaxX < tMaxZ) { tCell = tMaxX; tMaxX += tDX; cx += stepX; }
+            else { tCell = tMaxZ; tMaxZ += tDZ; cz += stepZ; }
+        }
+        for (size_t i = gridCount_; i < statics.size(); ++i) testStatic((int)i);
     }
 
     std::vector<AABB> boxes;
@@ -720,8 +896,10 @@ float World::groundHeight(float x, float z, float radius, float feetY, float ste
             b.min.z < foot.max.z && b.max.z > foot.min.z)
             best = b.max.y;
     };
-    for (const StaticBox& s : statics)
+    forStaticsIn(AABB({x - fr, -1e9f, z - fr}, {x + fr, 1e9f, z + fr}), [&](int i) {
+        const StaticBox& s = statics[(size_t)i];
         if (s.collide && s.alive) consider(s.box);
+    });
     for (const Chest& c : chests) consider(c.bounds());
 
     std::vector<AABB> boxes;
@@ -745,9 +923,58 @@ float World::groundHeight(float x, float z, float radius, float feetY, float ste
     return best;
 }
 
+// ------------------------------------------------------------------ static grid
+void World::buildStaticGrid() {
+    gridN_ = (int)std::ceil(2.0f * (MAP_HALF + 40.0f) / GRID_CELL);
+    grid_.assign((size_t)gridN_ * gridN_, std::vector<int>());
+    auto cellOf = [&](float v) { return std::max(0, std::min(gridN_ - 1, (int)std::floor((v + MAP_HALF + 40.0f) / GRID_CELL))); };
+    for (size_t i = 0; i < statics.size(); ++i) {
+        const AABB& b = statics[i].box;
+        for (int cz = cellOf(b.min.z); cz <= cellOf(b.max.z); ++cz)
+            for (int cx = cellOf(b.min.x); cx <= cellOf(b.max.x); ++cx) grid_[(size_t)cz * gridN_ + cx].push_back((int)i);
+    }
+    gridCount_ = statics.size();
+    if (gridCount_ > 0) gridLastBox_ = statics[gridCount_ - 1].box;
+    stamp_.assign(statics.size(), 0);
+    stampNow_ = 0;
+}
+
+bool World::gridOk() const {
+    if (!staticGridEnabled || gridN_ == 0 || statics.size() < gridCount_) return false;
+    if (gridCount_ == 0) return true;
+    const AABB& b = statics[gridCount_ - 1].box;
+    return b.min.x == gridLastBox_.min.x && b.min.y == gridLastBox_.min.y && b.min.z == gridLastBox_.min.z &&
+           b.max.x == gridLastBox_.max.x && b.max.y == gridLastBox_.max.y && b.max.z == gridLastBox_.max.z;
+}
+
+template <class Fn>
+void World::forStaticsIn(const AABB& region, Fn fn) const {
+    if (!gridOk()) {
+        for (size_t i = 0; i < statics.size(); ++i) fn((int)i);
+        return;
+    }
+    if (stamp_.size() < gridCount_) stamp_.resize(gridCount_, 0);
+    if (++stampNow_ == 0) {   // wrapped around: clear the marks
+        std::fill(stamp_.begin(), stamp_.end(), 0u);
+        stampNow_ = 1;
+    }
+    auto cellOf = [&](float v) { return std::max(0, std::min(gridN_ - 1, (int)std::floor((v + MAP_HALF + 40.0f) / GRID_CELL))); };
+    int x0 = cellOf(region.min.x), x1 = cellOf(region.max.x), z0 = cellOf(region.min.z), z1 = cellOf(region.max.z);
+    for (int cz = z0; cz <= z1; ++cz)
+        for (int cx = x0; cx <= x1; ++cx)
+            for (int i : grid_[(size_t)cz * gridN_ + cx]) {
+                if (stamp_[(size_t)i] == stampNow_) continue;
+                stamp_[(size_t)i] = stampNow_;
+                fn(i);
+            }
+    for (size_t i = gridCount_; i < statics.size(); ++i) fn((int)i);
+}
+
 void World::collectSolids(const AABB& region, std::vector<AABB>& out) const {
-    for (const StaticBox& s : statics)
+    forStaticsIn(region, [&](int i) {
+        const StaticBox& s = statics[(size_t)i];
         if (s.collide && s.alive && s.box.overlaps(region)) out.push_back(s.box);
+    });
     for (const Chest& c : chests)
         if (c.bounds().overlaps(region)) out.push_back(c.bounds());
     std::vector<AABB> boxes;
@@ -1012,6 +1239,11 @@ HarvestResult World::harvest(int staticIndex, float damage) {
             if (s.group == gi) s.alive = false;
     }
     return r;
+}
+
+bool World::shatterGlass(int i) {
+    if (i < 0 || i >= (int)statics.size() || statics[(size_t)i].kind != PropKind::Glass || !statics[(size_t)i].alive) return false;
+    return harvest(i, 1e6f).destroyed;
 }
 
 void World::updateProps(float dt) {
